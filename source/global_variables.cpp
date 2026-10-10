@@ -78,6 +78,7 @@ unsigned char CONF_SI4463_freq_conf_RX[15];
 unsigned char CONF_SI4463_freq_conf_TX[15];
 unsigned char CONF_transmission_method=0;
 unsigned char CONF_master_FDD=0;
+unsigned char CONF_Eth_mode = 0x07;
 unsigned long int CONF_master_down_IP;
 unsigned int CONF_TDMA_frame_duration = 65000; // 
 unsigned int CONF_TDMA_slot_duration = 3360;

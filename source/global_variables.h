@@ -44,7 +44,7 @@ extern ext_SRAM_chip* SPI_SRAM_p;
 	#define SI4463_NOUTDIV 8
 #endif
 
-#define FW_VERSION "2020_05_16"
+#define FW_VERSION "2020_06_29-dl6abe"
 
 extern SI4463_Chip* G_SI4463;
 
@@ -104,6 +104,7 @@ extern unsigned char CONF_SI4463_freq_conf_RX[15];
 extern unsigned char CONF_SI4463_freq_conf_TX[15];
 extern unsigned char CONF_transmission_method;
 extern unsigned char CONF_master_FDD;
+extern unsigned char CONF_Eth_mode;
 extern unsigned long int CONF_master_down_IP;
 extern unsigned int CONF_TDMA_frame_duration;
 extern unsigned int CONF_TDMA_slot_duration;
