@@ -74,8 +74,7 @@ int main()
 	RCC->CSR |= RCC_CSR_RMVF;
     wait_ms(200);
 	pc.baud(921600);
-    pc.printf("\r\n\r\nNPR FW %s\r\n", FW_VERSION);
-	pc.printf("reset reason: %s\r\n", snmp_reset_reason_text(G_reset_reason));
+    pc.printf("\r\n\r\n" FW_BANNER_FORMAT, FW_VERSION, snmp_reset_reason_text(G_reset_reason));
 	
 	Timer slow_timer; 
 	int i = 1;

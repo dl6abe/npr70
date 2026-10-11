@@ -18,6 +18,7 @@
 #include "HMI_telnet.h"
 #include "mbed.h"
 #include "global_variables.h"
+#include "SNMP.h"
 #include "Eth_IPv4.h"
 #include "signaling.h"
 #include "config_flash.h"
@@ -328,7 +329,7 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 		}
 		if (strcmp(loc_command_str, "version") == 0) {
 			command_understood = 1;
-			HMI_printf("firmware: %s\r\nfreq band: %s\r\nready> ", FW_VERSION, FREQ_BAND);
+			HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\nready> ", FW_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
 		}
 		if (strcmp(loc_command_str, "exit") == 0) {
 			command_understood = 1;

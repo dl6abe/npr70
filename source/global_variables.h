@@ -47,6 +47,8 @@ extern ext_SRAM_chip* SPI_SRAM_p;
 // Set by the Makefile: YYMMDD and the build hour as a letter (A = 00 ... X = 23)
 extern const char FW_VERSION_ID[];
 #define FW_VERSION FW_VERSION_ID
+// The start message and the version command print these two lines in the same way
+#define FW_BANNER_FORMAT "NPR FW %s\r\nreset reason: %s\r\n"
 
 extern SI4463_Chip* G_SI4463;
 
