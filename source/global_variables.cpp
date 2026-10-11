@@ -125,6 +125,10 @@ unsigned int my_client_radio_connexion_date;
 unsigned char G_connect_rejection_reason;
 int G_temperature_SI4463;
 unsigned char G_reset_reason = 0;
+#ifndef FW_BUILD_ID
+#define FW_BUILD_ID "unknown"
+#endif
+const char FW_VERSION_ID[] = FW_BUILD_ID;
 int G_need_temperature_check = 0;
 unsigned long int CONF_radio_IP_size_requested;
 unsigned char CONF_radio_static_IP_requested;

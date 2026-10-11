@@ -132,6 +132,7 @@ void snmpGetRSSIDown(void *ptr, uint8_t *len);
 void snmpGetErrUp(void *ptr, uint8_t *len);
 void snmpGetErrDown(void *ptr, uint8_t *len);
 void snmpGetSysName(void *ptr, uint8_t *len);
+void snmpGetFirmwareVersion(void *ptr, uint8_t *len);
 void snmpGetResetReason(void *ptr, uint8_t *len);
 void snmpGetResetReasonText(void *ptr, uint8_t *len);
 const char* snmp_reset_reason_text(unsigned char code);

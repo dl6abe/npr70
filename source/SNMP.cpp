@@ -119,6 +119,8 @@ static const dataEntryType snmpData[] =
         SNMP_CLIENT_COLUMN(3, ASN_GAUGE, snmpGetClientDistance),
         SNMP_CLIENT_COLUMN(4, ASN_GAUGE, snmpGetClientRSSI),
         SNMP_CLIENT_COLUMN(5, ASN_GAUGE, snmpGetClientErr),
+        //               .11.0            // Firmware version (text)
+        {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 11, 0}, ASN_OCTETSTRING,0, {}, snmpGetFirmwareVersion, NULL },
 
 };
 
@@ -162,6 +164,14 @@ void snmpGetSysName(void *ptr, uint8_t *len)
     char *out = (char *)ptr; // MAX_STRING bytes
     // the first two bytes of the stored callsign are not part of the name
     strncpy(out, CONF_radio_my_callsign + 2, MAX_STRING - 1);
+    out[MAX_STRING - 1] = 0;
+    *len = strlen(out);
+}
+
+void snmpGetFirmwareVersion(void *ptr, uint8_t *len)
+{
+    char *out = (char *)ptr; // MAX_STRING bytes
+    strncpy(out, FW_VERSION, MAX_STRING - 1);
     out[MAX_STRING - 1] = 0;
     *len = strlen(out);
 }

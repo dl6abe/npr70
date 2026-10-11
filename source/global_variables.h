@@ -44,7 +44,9 @@ extern ext_SRAM_chip* SPI_SRAM_p;
 	#define SI4463_NOUTDIV 8
 #endif
 
-#define FW_VERSION "2020_06_29-dl6abe"
+// Set by the Makefile: YYMMDD and the build hour as a letter (A = 00 ... X = 23)
+extern const char FW_VERSION_ID[];
+#define FW_VERSION FW_VERSION_ID
 
 extern SI4463_Chip* G_SI4463;
 

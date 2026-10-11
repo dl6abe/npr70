@@ -175,6 +175,7 @@ check("table: callsign free slot empty", d.get(B + ".10.2.0") == "", d.get(B + "
 check("table: TA client 3 = 25", d.get(B + ".10.3.3") == 25, d.get(B + ".10.3.3"))
 check("table: RSSI client 1 = 80", d.get(B + ".10.4.1") == 0x50, d.get(B + ".10.4.1"))
 check("table: BER client 3 = 1000", d.get(B + ".10.5.3") == 1000, d.get(B + ".10.5.3"))
+check("firmware version", d.get(B + ".11.0") == "261011G", d.get(B + ".11.0"))
 check("reset reason code", d.get(B + ".8.0") == 4, d.get(B + ".8.0"))
 check("reset reason text", d.get(B + ".9.0") == "iwdg", d.get(B + ".9.0"))
 check("master scalar RSSI is 0, not garbage", d.get(B + ".4.0") == 0, d.get(B + ".4.0"))

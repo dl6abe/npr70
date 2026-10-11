@@ -41,6 +41,15 @@ VPATH = ..
 
 PROJECT := NPR_14
 
+# Firmware version: YYMMDD plus the hour of the build as a letter (A = 00 ... X = 23), local time.
+# fw_build_id.txt changes only when the id changes, so global_variables.o is rebuilt once per hour
+# and a rebuild in the same hour gives the same binary.
+FW_BUILD_ID := $(shell date +%y%m%d)$(shell date +%H | awk '{print substr("ABCDEFGHIJKLMNOPQRSTUVWX", $$1 + 1, 1)}')
+$(shell [ "$$(cat fw_build_id.txt 2>/dev/null)" = "$(FW_BUILD_ID)" ] || echo "$(FW_BUILD_ID)" > fw_build_id.txt)
+./source/global_variables.o: fw_build_id.txt
+./source/global_variables.o: CXX_FLAGS += -DFW_BUILD_ID=\"$(FW_BUILD_ID)\"
+.DEFAULT_GOAL := all
+
 
 # Project settings
 ###############################################################################
