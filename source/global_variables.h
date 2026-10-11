@@ -178,6 +178,7 @@ extern unsigned int my_client_radio_connexion_state;
 extern unsigned int my_client_radio_connexion_date;
 extern unsigned char G_connect_rejection_reason;
 extern int G_temperature_SI4463;
+extern unsigned char G_reset_reason; //why the MCU restarted: 0 unknown, 1 power-on, 2 pin, 3 software, 4 iwdg, 5 wwdg, 6 low-power, 7 option-bytes
 extern int G_need_temperature_check;
 extern unsigned long int CONF_radio_IP_size_requested;
 extern unsigned char CONF_radio_static_IP_requested;

@@ -54,11 +54,28 @@ InterruptIn Int_SI4463(PA_3);
 DigitalOut CS2(PA_4);
 SPI spi_1(PA_7, PA_6, PA_5); // mosi, miso, sclk
 
+// Translate the reset flags of the MCU into the code behind G_reset_reason.
+// One reset sets several flags (a power-on also sets the pin flag), so the order matters.
+static unsigned char decode_reset_reason(uint32_t csr) {
+	if (csr & RCC_CSR_LPWRRSTF) return 6;
+	if (csr & RCC_CSR_WWDGRSTF) return 5;
+	if (csr & RCC_CSR_IWDGRSTF) return 4;
+	if (csr & RCC_CSR_SFTRSTF) return 3;
+	if (csr & RCC_CSR_OBLRSTF) return 7;
+	if (csr & RCC_CSR_BORRSTF) return 1;
+	if (csr & RCC_CSR_PINRSTF) return 2;
+	return 0;
+}
+
 int main()
 {
+	// read the reset flags first and clear them so the next start sees only its own reason
+	G_reset_reason = decode_reset_reason(RCC->CSR);
+	RCC->CSR |= RCC_CSR_RMVF;
     wait_ms(200);
 	pc.baud(921600);
     pc.printf("\r\n\r\nNPR FW %s\r\n", FW_VERSION);
+	pc.printf("reset reason: %s\r\n", snmp_reset_reason_text(G_reset_reason));
 	
 	Timer slow_timer; 
 	int i = 1;

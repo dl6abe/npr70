@@ -27,7 +27,61 @@ struct messageStruct request_msg;
 struct messageStruct response_msg;
 uint8_t errorStatus, errorIndex;
 
-dataEntryType snmpData[] =
+void snmpGetVar(void *ptr, uint8_t *len, const uint32_t var);
+
+// Per client table, filled on the master (the master keeps all client data):
+//   1.3.6.1.4.1.54539.100.10.<column>.<client ID 0..6>
+// Column 1 connected (1/0), 2 callsign, 3 distance (x 0.15 km), 4 RSSI uplink (value/2-136 dBm),
+// 5 error rate uplink (value/500 percent). The units match the scalar entries .3, .4 and .6.
+// The columns are written one after the other so the list stays in ascending OID order,
+// which GET-NEXT (snmpwalk) needs.
+static_assert(radio_addr_table_size == 7, "the client table below lists 7 clients");
+
+template <uint8_t ID> void snmpGetClientConnected(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, CONF_radio_addr_table_status[ID] ? 1 : 0);
+}
+
+template <uint8_t ID> void snmpGetClientCallsign(void *ptr, uint8_t *len)
+{
+    char *out = (char *)ptr; // MAX_STRING bytes, the caller measures it with strlen
+    out[0] = 0;
+    if (CONF_radio_addr_table_status[ID]) {
+        // the first two bytes of the stored callsign are not part of the name
+        strncpy(out, CONF_radio_addr_table_callsign[ID] + 2, MAX_STRING - 1);
+        out[MAX_STRING - 1] = 0;
+    }
+    *len = strlen(out);
+}
+
+template <uint8_t ID> void snmpGetClientDistance(void *ptr, uint8_t *len)
+{
+    // The master keeps the distance ten times finer than what it sends in the who message
+    long ta = TDMA_table_TA[ID] / 10;
+    snmpGetVar(ptr, len, (CONF_radio_addr_table_status[ID] && ta > 0) ? ta : 0);
+}
+
+template <uint8_t ID> void snmpGetClientRSSI(void *ptr, uint8_t *len)
+{
+    // The master keeps the filtered RSSI in the upper byte
+    snmpGetVar(ptr, len, CONF_radio_addr_table_status[ID] ? (G_radio_addr_table_RSSI[ID] >> 8) : 0);
+}
+
+template <uint8_t ID> void snmpGetClientErr(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, CONF_radio_addr_table_status[ID] ? G_radio_addr_table_BER[ID] : 0);
+}
+
+// 1.3.6.1.4.1.54539.100.10.<col>.<id>
+#define SNMP_CLIENT_ENTRY(col, type, getter, id) \
+    {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 10, col, id}, type, 0, {}, getter<id>, NULL }
+#define SNMP_CLIENT_COLUMN(col, type, getter) \
+    SNMP_CLIENT_ENTRY(col, type, getter, 0), SNMP_CLIENT_ENTRY(col, type, getter, 1), \
+    SNMP_CLIENT_ENTRY(col, type, getter, 2), SNMP_CLIENT_ENTRY(col, type, getter, 3), \
+    SNMP_CLIENT_ENTRY(col, type, getter, 4), SNMP_CLIENT_ENTRY(col, type, getter, 5), \
+    SNMP_CLIENT_ENTRY(col, type, getter, 6)
+
+static const dataEntryType snmpData[] =
     {
         // System MIB
         // SysDescr Entry
@@ -52,6 +106,16 @@ dataEntryType snmpData[] =
         {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 6, 0}, ASN_GAUGE,0, {}, snmpGetErrUp, NULL },
         //               .7.0             // Error rate Downlink
         {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 7, 0}, ASN_GAUGE,0, {}, snmpGetErrDown, NULL },
+        //               .8.0             // Reset reason of the last start (code)
+        {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 8, 0}, ASN_INTEGER,0, {}, snmpGetResetReason, NULL },
+        //               .9.0             // Reset reason of the last start (text)
+        {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 9, 0}, ASN_OCTETSTRING,0, {}, snmpGetResetReasonText, NULL },
+        //               .10.<column>.<client ID>   // client table, see above
+        SNMP_CLIENT_COLUMN(1, ASN_INTEGER, snmpGetClientConnected),
+        SNMP_CLIENT_COLUMN(2, ASN_OCTETSTRING, snmpGetClientCallsign),
+        SNMP_CLIENT_COLUMN(3, ASN_GAUGE, snmpGetClientDistance),
+        SNMP_CLIENT_COLUMN(4, ASN_GAUGE, snmpGetClientRSSI),
+        SNMP_CLIENT_COLUMN(5, ASN_GAUGE, snmpGetClientErr),
 
 };
 
@@ -76,6 +140,31 @@ void hexdump(uint8_t *buffer, uint16_t len)
         printf(" %02x", buffer[i]);
     }
     printf("\r\n");
+}
+
+// Names for G_reset_reason, set at start from the reset flags of the MCU
+static const char* const reset_reason_names[] = {
+    "unknown", "power-on", "pin", "software", "iwdg", "wwdg", "low-power", "option-bytes"
+};
+
+const char* snmp_reset_reason_text(unsigned char code)
+{
+    if (code >= sizeof(reset_reason_names) / sizeof(reset_reason_names[0]))
+        code = 0;
+    return reset_reason_names[code];
+}
+
+void snmpGetResetReason(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, G_reset_reason);
+}
+
+void snmpGetResetReasonText(void *ptr, uint8_t *len)
+{
+    char *out = (char *)ptr; // MAX_STRING bytes
+    strncpy(out, snmp_reset_reason_text(G_reset_reason), MAX_STRING - 1);
+    out[MAX_STRING - 1] = 0;
+    *len = strlen(out);
 }
 
 void snmpGetUptime(void *ptr, uint8_t *len) {
@@ -103,16 +192,23 @@ void snmpGetLinkStatus(void *ptr, uint8_t *len)
     snmpGetVar(ptr, len, my_client_radio_connexion_state);
 }
 
+// The master and a client that is not connected have no valid own client ID (0x7E, 0xFE).
+// Indexing the tables with it reads outside of the arrays.
+static bool snmpOwnIdValid()
+{
+    return (!is_TDMA_master) && (my_radio_client_ID < radio_addr_table_size);
+}
+
 void snmpGetLinkDistance(void *ptr, uint8_t *len)
 {
     // Formula is : 0.15 * value
-    snmpGetVar(ptr, len, TDMA_table_TA[my_radio_client_ID]);
+    snmpGetVar(ptr, len, snmpOwnIdValid() ? TDMA_table_TA[my_radio_client_ID] : 0);
 }
 
 void snmpGetRSSIUp(void *ptr, uint8_t *len)
 {
     // Formula for dBm is: value/2-136
-    snmpGetVar(ptr, len, G_radio_addr_table_RSSI[my_radio_client_ID]);
+    snmpGetVar(ptr, len, snmpOwnIdValid() ? G_radio_addr_table_RSSI[my_radio_client_ID] : 0);
 }
 
 void snmpGetRSSIDown(void *ptr, uint8_t *len)
@@ -124,7 +220,7 @@ void snmpGetRSSIDown(void *ptr, uint8_t *len)
 void snmpGetErrUp(void *ptr, uint8_t *len)
 {
     // Formula for percent is: value / 500
-    snmpGetVar(ptr, len, G_radio_addr_table_BER[my_radio_client_ID]);
+    snmpGetVar(ptr, len, snmpOwnIdValid() ? G_radio_addr_table_BER[my_radio_client_ID] : 0);
 }
 
 void snmpGetErrDown(void *ptr, uint8_t *len)
@@ -181,40 +277,44 @@ int32_t getValue(uint8_t *vptr, int32_t vlen)
     return value;
 }
 
-int32_t getEntry(int8_t id, uint8_t *dataType, void *ptr, uint8_t *len)
+// snmpData is read-only and lives in flash. The value of an entry that has a getter is built in
+// these buffers for the request that is answered right now.
+static int32_t getEntry(int8_t id, uint8_t *dataType, void *ptr, uint8_t *len)
 {
-    uint8_t *ptr_8;
-    int32_t value;
-
-    uint8_t *string;
-    uint8_t j;
-
     if (!((id >= 0) && (id < maxData)))
         return INVALID_ENTRY_ID;
 
-    *dataType = snmpData[id].dataType;
+    const dataEntryType *entry = &snmpData[id];
+    uint8_t datalen = entry->dataLen;
+
+    *dataType = entry->dataType;
 
     switch (*dataType)
     {
     case ASN_OCTETSTRING:
     case ASN_OBJECTID:
     {
-        string = (uint8_t*) ptr;
+        uint8_t *string = (uint8_t*) ptr;
+        char text[MAX_STRING + 1];
 
-        if (snmpData[id].getfunction != NULL)
+        memcpy(text, entry->u.octetstring, MAX_STRING);
+        text[MAX_STRING] = 0;
+
+        if (entry->getfunction != NULL)
         {
-            snmpData[id].getfunction((void *)&snmpData[id].u.octetstring, &snmpData[id].dataLen);
+            entry->getfunction((void *)text, &datalen);
+            text[MAX_STRING] = 0;
         }
 
         if ((*dataType) == ASN_OCTETSTRING)
         {
-            snmpData[id].dataLen = (uint8_t)strlen((char const *)&snmpData[id].u.octetstring);
+            datalen = (uint8_t)strlen(text);
         }
 
-        *len = snmpData[id].dataLen;
-        for (j = 0; j < *len; j++)
+        *len = datalen;
+        for (uint8_t j = 0; j < *len; j++)
         {
-            string[j] = snmpData[id].u.octetstring[j];
+            string[j] = (uint8_t)text[j];
         }
     }
     break;
@@ -224,20 +324,20 @@ int32_t getEntry(int8_t id, uint8_t *dataType, void *ptr, uint8_t *len)
     case ASN_COUNTER:
     case ASN_GAUGE:
     {
-        if (snmpData[id].getfunction != NULL)
+        uint32_t value = entry->u.intval;
+
+        if (entry->getfunction != NULL)
         {
-            snmpData[id].getfunction((void *)&snmpData[id].u.intval, &snmpData[id].dataLen);
+            entry->getfunction((void *)&value, &datalen);
         }
 
-        if (snmpData[id].dataLen)
-            *len = snmpData[id].dataLen;
+        if (datalen)
+            *len = datalen;
         else
             *len = sizeof(uint32_t);
 
-        ptr_8 = (uint8_t*) ptr;
-        value = snmpData[id].u.intval;
-
-        for (j = 0; j < *len; j++)
+        uint8_t *ptr_8 = (uint8_t*) ptr;
+        for (uint8_t j = 0; j < *len; j++)
         {
             ptr_8[j] = (uint8_t)((value >> ((*len - j - 1) * 8)));
         }
@@ -251,56 +351,13 @@ int32_t getEntry(int8_t id, uint8_t *dataType, void *ptr, uint8_t *len)
     return SNMP_SUCCESS;
 }
 
-int8_t setEntry(uint8_t id, void *val, int32_t vlen, uint8_t dataType, int32_t index)
+// The agent is read-only: a SET request is answered with noSuchName and changes nothing.
+static int8_t setEntry(uint8_t id, void *val, int32_t vlen, uint8_t dataType, int32_t index)
 {
-
-    int8_t retStatus = OID_NOT_FOUND;
-    int32_t j;
-
-    if (snmpData[id].dataType != dataType)
-    {
-        errorStatus = BAD_VALUE;
-        errorIndex = index;
-        return INVALID_DATA_TYPE;
-    }
-
-    switch (snmpData[id].dataType)
-    {
-    case ASN_OCTETSTRING:
-    case ASN_OBJECTID:
-    {
-        uint8_t *string = (uint8_t*) val;
-        for (j = 0; j < vlen; j++)
-        {
-            snmpData[id].u.octetstring[j] = string[j];
-        }
-        snmpData[id].dataLen = vlen;
-    }
-        retStatus = SNMP_SUCCESS;
-        break;
-
-    case ASN_INTEGER:
-    case ASN_TIMETICKS:
-    case ASN_COUNTER:
-    case ASN_GAUGE:
-    {
-        snmpData[id].u.intval = getValue((uint8_t *)val, vlen);
-        snmpData[id].dataLen = vlen;
-
-        if (snmpData[id].setfunction != NULL)
-        {
-            snmpData[id].setfunction(snmpData[id].u.intval);
-        }
-    }
-        retStatus = SNMP_SUCCESS;
-        break;
-
-    default:
-        retStatus = INVALID_DATA_TYPE;
-        break;
-    }
-
-    return retStatus;
+    (void)id; (void)val; (void)vlen; (void)dataType;
+    errorStatus = NO_SUCH_NAME;
+    errorIndex = index;
+    return INVALID_DATA_TYPE;
 }
 
 void insertRespLen(int32_t reqStart, int32_t respStart, int16_t size)
@@ -647,10 +704,14 @@ void snmp_loop(W5500_chip *W5500)
 
     if (W5500_read_received_size(W5500, SNMP_SOCKET) > 0)
     {
-        uint8_t buf[4];
+        uint8_t buf[6]; // caller IP (4 bytes) and source port (2 bytes)
         uint16_t idx = 0;
 
         request_msg.len = W5500_read_UDP_pckt(W5500, SNMP_SOCKET, request_msg.buffer, MAX_SNMPMSG_LEN);
+        if (request_msg.len <= 8) {
+            // Shorter than the W5500 UDP header: nothing to parse (and the length below would wrap)
+            return;
+        }
         //hexdump(request_msg.buffer, request_msg.len);
 
         // Extract the caller's IP and source port for our reply:
