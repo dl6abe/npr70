@@ -63,5 +63,6 @@ void radio_flush_TX_FIFO(void);
 
 void radio_save_RSSI_BER (unsigned char client_byte, unsigned char is_downlink, unsigned char RSSI_loc, unsigned int micro_BER);
 void radio_count_fec (unsigned char client_byte, unsigned char is_downlink, unsigned int bad_blocks);
+void radio_clear_fec_stats (void);
 
 #endif

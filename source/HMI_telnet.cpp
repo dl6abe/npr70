@@ -252,6 +252,7 @@ static void HMI_print_help(void) {
 	HMI_printf("  radio on|off        switch the radio\r\n");
 	HMI_printf("  status              live link status, Ctrl+C to leave\r\n");
 	HMI_printf("  who                 live master and client list, Ctrl+C to leave\r\n");
+	HMI_printf("  clear stats         set the received frame counters back to 0\r\n");
 	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
 	HMI_printf("  version             firmware version and band\r\n");
 	HMI_printf("  reboot              restart the modem\r\n");
@@ -356,6 +357,15 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			virt_EEPROM_errase_all();
 			HMI_printf("Done. Now rebooting...\r\n");
 			NVIC_SystemReset();
+		}
+		if (strcmp(loc_command_str, "clear") == 0) {
+			command_understood = 1;
+			if ( (loc_param1_str != NULL) && (strcmp(loc_param1_str, "stats") == 0) ) {
+				radio_clear_fec_stats();
+				HMI_printf("received frame counters cleared\r\nready> ");
+			} else {
+				HMI_printf("ERROR: use 'clear stats'.\r\nready> ");
+			}
 		}
 		if (strcmp(loc_command_str, "version") == 0) {
 			command_understood = 1;

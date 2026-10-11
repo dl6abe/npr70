@@ -757,6 +757,20 @@ void radio_count_fec (unsigned char client_byte, unsigned char is_downlink, unsi
 	}
 }
 
+// Sets the receive counters back to 0 (console command 'clear stats')
+void radio_clear_fec_stats (void) {
+	int i;
+	G_rx_fec_ok = 0;
+	G_rx_fec_fixed = 0;
+	G_rx_fec_lost = 0;
+	G_rx_seg_gap = 0;
+	for (i=0; i<radio_addr_table_size; i++) {
+		G_rx_fec_client_ok[i] = 0;
+		G_rx_fec_client_fixed[i] = 0;
+		G_rx_fec_client_lost[i] = 0;
+	}
+}
+
 void radio_save_RSSI_BER (unsigned char client_byte, unsigned char is_downlink, unsigned char RSSI_loc, unsigned int micro_BER) {
 	unsigned char client_ID = 0xF0;
 	client_ID = client_byte & 0x7F;
