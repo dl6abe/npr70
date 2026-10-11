@@ -25,12 +25,11 @@
 // This will reserve about 1k of RAM
 struct messageStruct request_msg;
 struct messageStruct response_msg;
-uint8_t errorStatus, errorIndex;
 
 void snmpGetVar(void *ptr, uint8_t *len, const uint32_t var);
 
 // Per client table, filled on the master (the master keeps all client data):
-//   1.3.6.1.4.1.54539.100.10.<column>.<client ID 0..6>
+//   1.3.6.1.4.1.54539.100.10.1.<column>.<client ID 0..6>   (table 10, entry 1, see NPR-70.mib)
 // Column 1 connected (1/0), 2 callsign, 3 distance (x 0.15 km), 4 RSSI uplink (value/2-136 dBm),
 // 5 error rate uplink (value/500 percent). The units match the scalar entries .3, .4 and .6.
 // The columns are written one after the other so the list stays in ascending OID order,
@@ -72,9 +71,9 @@ template <uint8_t ID> void snmpGetClientErr(void *ptr, uint8_t *len)
     snmpGetVar(ptr, len, CONF_radio_addr_table_status[ID] ? G_radio_addr_table_BER[ID] : 0);
 }
 
-// 1.3.6.1.4.1.54539.100.10.<col>.<id>
+// 1.3.6.1.4.1.54539.100.10.1.<col>.<id>
 #define SNMP_CLIENT_ENTRY(col, type, getter, id) \
-    {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 10, col, id}, type, 0, {}, getter<id>, NULL }
+    {13, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 10, 1, col, id}, type, 0, {}, getter<id>, NULL }
 #define SNMP_CLIENT_COLUMN(col, type, getter) \
     SNMP_CLIENT_ENTRY(col, type, getter, 0), SNMP_CLIENT_ENTRY(col, type, getter, 1), \
     SNMP_CLIENT_ENTRY(col, type, getter, 2), SNMP_CLIENT_ENTRY(col, type, getter, 3), \
@@ -113,7 +112,7 @@ static const dataEntryType snmpData[] =
         {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 8, 0}, ASN_INTEGER,0, {}, snmpGetResetReason, NULL },
         //               .9.0             // Reset reason of the last start (text)
         {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 9, 0}, ASN_OCTETSTRING,0, {}, snmpGetResetReasonText, NULL },
-        //               .10.<column>.<client ID>   // client table, see above
+        //               .10.1.<column>.<client ID>   // client table, see above
         SNMP_CLIENT_COLUMN(1, ASN_INTEGER, snmpGetClientConnected),
         SNMP_CLIENT_COLUMN(2, ASN_OCTETSTRING, snmpGetClientCallsign),
         SNMP_CLIENT_COLUMN(3, ASN_GAUGE, snmpGetClientDistance),
@@ -267,6 +266,28 @@ int8_t findEntry(uint8_t *oid, uint8_t len)
     return OID_NOT_FOUND;
 }
 
+// GET-NEXT: the first entry whose OID is greater than the requested one, even if the requested OID
+// is not an entry (a table, a subtree, an OID that ends in the middle). snmpData is in ascending
+// OID order. The encoded bytes of an OID compare in the same order as its numbers.
+int8_t findNextEntry(uint8_t *oid, uint8_t len)
+{
+    uint8_t i;
+
+    for (i = 0; i < maxData; i++)
+    {
+        uint8_t common = (len < snmpData[i].oidlen) ? len : snmpData[i].oidlen;
+        int cmp = memcmp(snmpData[i].oid, oid, common);
+
+        if (cmp == 0)
+            cmp = (int)snmpData[i].oidlen - (int)len;
+
+        if (cmp > 0)
+            return (i);
+    }
+
+    return OID_NOT_FOUND;
+}
+
 int8_t getOID(int8_t id, uint8_t *oid, uint8_t *len)
 {
     uint8_t j;
@@ -373,341 +394,272 @@ static int32_t getEntry(int8_t id, uint8_t *dataType, void *ptr, uint8_t *len)
     return SNMP_SUCCESS;
 }
 
-// The agent is read-only: a SET request is answered with noSuchName and changes nothing.
-static int8_t setEntry(uint8_t id, void *val, int32_t vlen, uint8_t dataType, int32_t index)
+// ---------------------------------------------------------------------------------------------
+// Request parsing and response building (SNMP v1: GET and GET-NEXT, SET is refused)
+//
+// The request is read with bounds checks. The response is written from scratch: each container
+// (SEQUENCE, PDU) reserves a 3 byte length field and is closed with the real length in the
+// shortest form. The response can be longer than the request, so its length form must not be
+// taken over from the request.
+// ---------------------------------------------------------------------------------------------
+
+struct tlvRef {
+    uint8_t tag;
+    const uint8_t *start; // first byte of the TLV
+    const uint8_t *val;   // first byte of the value
+    uint16_t len;         // length of the value
+    uint16_t total;       // length of the whole TLV
+};
+
+// Reads the TLV at buf[*pos], it must end before buf[end]. Moves *pos behind it.
+static bool readTLV(const uint8_t *buf, uint16_t end, uint16_t *pos, tlvRef *t)
 {
-    (void)id; (void)val; (void)vlen; (void)dataType;
-    errorStatus = NO_SUCH_NAME;
-    errorIndex = index;
-    return INVALID_DATA_TYPE;
-}
+    uint16_t p = *pos;
+    uint16_t l;
 
-void insertRespLen(int32_t reqStart, int32_t respStart, int16_t size)
-{
-	int32_t indexStart, lenLength;
-	uint32_t mask = 0xff;
-	int32_t shift = 0;
+    if (p + 2 > end)
+        return false;
 
-	if (request_msg.buffer[reqStart+1] & 0x80)
-	{
-		lenLength = request_msg.buffer[reqStart+1] & 0x7f;
-		indexStart = respStart+2;
+    t->tag = buf[p];
+    t->start = buf + p;
+    l = buf[p + 1];
+    p += 2;
 
-		while (lenLength--)
-		{
-			response_msg.buffer[indexStart+lenLength] = 
-				(uint8_t)((size & mask) >> shift);
-			shift+=8;
-			mask <<= shift;
-		}
-	}
-	else
-	{
-		response_msg.buffer[respStart+1] = (uint8_t)(size & 0xff);
-	}
-}
-
-uint16_t parseLength(const uint8_t *msg, uint16_t *len)
-{
-    uint16_t i = 1;
-
-    if (msg[0] & 0x80)
+    if (l & 0x80)
     {
-        uint16_t tlen = (msg[0] & 0x7f) - 1;
-        *len = msg[i++];
-        while (tlen--)
-        {
-            *len <<= 8;
-            *len |= msg[i++];
-        }
+        uint8_t n = l & 0x7f;
+        if ((n == 0) || (n > 2) || (p + n > end))
+            return false;
+        l = 0;
+        while (n--)
+            l = (uint16_t)((l << 8) | buf[p++]);
+    }
+
+    if (p + l > end)
+        return false;
+
+    t->val = buf + p;
+    t->len = l;
+    t->total = (uint16_t)(p + l - *pos);
+    *pos = p + l;
+    return true;
+}
+
+struct respWriter {
+    uint8_t *buf;
+    uint16_t pos;
+    bool ok; // false once something did not fit
+};
+
+static void wBytes(respWriter *w, const uint8_t *data, uint16_t n)
+{
+    if (w->pos + n > MAX_SNMPMSG_LEN)
+    {
+        w->ok = false;
+        return;
+    }
+    memcpy(w->buf + w->pos, data, n);
+    w->pos += n;
+}
+
+// Opens a container: tag and room for a 3 byte length. Returns where it starts.
+static uint16_t wBegin(respWriter *w, uint8_t tag)
+{
+    uint16_t start = w->pos;
+    uint8_t head[4] = {tag, 0x82, 0, 0};
+    wBytes(w, head, 4);
+    return start;
+}
+
+// Closes the container that starts at 'start': writes the length in the shortest form
+static void wEnd(respWriter *w, uint16_t start)
+{
+    if (!w->ok)
+        return;
+
+    uint16_t len = w->pos - (start + 4);
+    uint8_t lenBytes[3];
+    uint8_t n;
+
+    if (len < 128)
+    {
+        lenBytes[0] = (uint8_t)len;
+        n = 1;
+    }
+    else if (len < 256)
+    {
+        lenBytes[0] = 0x81;
+        lenBytes[1] = (uint8_t)len;
+        n = 2;
     }
     else
     {
-        *len = msg[0];
+        lenBytes[0] = 0x82;
+        lenBytes[1] = (uint8_t)(len >> 8);
+        lenBytes[2] = (uint8_t)len;
+        n = 3;
     }
-    return i;
+
+    memmove(w->buf + start + 1 + n, w->buf + start + 4, len);
+    memcpy(w->buf + start + 1, lenBytes, n);
+    w->pos = start + 1 + n + len;
 }
 
-void parseTLV(const uint8_t *msg, int32_t index, tlvStructType *tlv)
+// tag, length (below 128) and the bytes
+static void wValue(respWriter *w, uint8_t tag, const uint8_t *data, uint8_t len)
 {
-    int32_t Llen = 0;
-
-    tlv->start = index;
-    Llen = parseLength((const uint8_t *)&msg[index + 1], &tlv->len);
-    tlv->vstart = index + Llen + 1;
-
-    switch (msg[index])
-    {
-    case SNMP_SEQUENCE:
-    case GET_REQUEST:
-    case GET_NEXT_REQUEST:
-    case SET_REQUEST:
-        tlv->nstart = tlv->vstart;
-        break;
-    default:
-        tlv->nstart = tlv->vstart + tlv->len;
-        break;
-    }
-
+    wBytes(w, &tag, 1);
+    wBytes(w, &len, 1);
+    wBytes(w, data, len);
 }
 
-
-int32_t parseVarBind(int32_t reqType, int32_t index)
+// Which entry answers this variable. SET is never allowed, the agent is read-only.
+static int8_t lookupEntry(uint8_t reqType, const tlvRef *name)
 {
-    int32_t seglen = 0;
-    int8_t id;
-    tlvStructType name, value;
-    int32_t size = 0;
+    if (reqType == GET_REQUEST)
+        return findEntry((uint8_t *)name->val, name->len);
+    if (reqType == GET_NEXT_REQUEST)
+        return findNextEntry((uint8_t *)name->val, name->len);
+    return OID_NOT_FOUND;
+}
 
-    parseTLV(request_msg.buffer, request_msg.index, &name);
+// Reads the variable at buf[*p], the variable list ends before buf[end]
+static bool readVarBind(const uint8_t *buf, uint16_t end, uint16_t *p, tlvRef *name, tlvRef *value)
+{
+    tlvRef vb;
+    uint16_t q;
 
-    if (request_msg.buffer[name.start] != ASN_OBJECTID)
-        return -1;
+    if (!readTLV(buf, end, p, &vb) || (vb.tag != SNMP_SEQUENCE))
+        return false;
+    q = vb.val - buf;
+    if (!readTLV(buf, q + vb.len, &q, name) || (name->tag != ASN_OBJECTID))
+        return false;
+    if (!readTLV(buf, vb.val - buf + vb.len, &q, value))
+        return false;
+    return true;
+}
 
-    id = findEntry(&request_msg.buffer[name.vstart], name.len);
+// Writes the response for the request in request_msg. Returns false if it does not fit.
+static bool buildResponse(const tlvRef *ver, const tlvRef *comm, const tlvRef *reqid, uint8_t reqType,
+                          uint16_t listPos, uint16_t listEnd, uint8_t errStatus, uint8_t errIndex)
+{
+    const uint8_t *req = request_msg.buffer;
+    respWriter w = {response_msg.buffer, 0, true};
+    uint16_t outer, pdu, list;
+    uint16_t p = listPos;
 
-    if ((reqType == GET_REQUEST) || (reqType == SET_REQUEST))
+    outer = wBegin(&w, SNMP_SEQUENCE);
+    wBytes(&w, ver->start, ver->total);
+    wBytes(&w, comm->start, comm->total);
+    pdu = wBegin(&w, GET_RESPONSE);
+    wBytes(&w, reqid->start, reqid->total);
+    wValue(&w, ASN_INTEGER, &errStatus, 1);
+    wValue(&w, ASN_INTEGER, &errIndex, 1);
+    list = wBegin(&w, SNMP_SEQUENCE_OF);
+
+    while ((errStatus != TOO_BIG) && (p < listEnd) && w.ok)
     {
-        seglen = name.nstart - name.start;
-        COPY_SEGMENT(name);
-        size = seglen;
-    }
-    else if (reqType == GET_NEXT_REQUEST)
-    {
-        response_msg.buffer[response_msg.index] = request_msg.buffer[name.start];
+        tlvRef name, value;
+        uint16_t seq;
+        int8_t id;
+        uint8_t dataType, len;
+        uint8_t data[MAX_STRING + 8];
 
-        if (++id >= maxData)
+        if (!readVarBind(req, listEnd, &p, &name, &value))
+            return false;
+
+        id = lookupEntry(reqType, &name);
+        seq = wBegin(&w, SNMP_SEQUENCE);
+        if ((id != OID_NOT_FOUND) && (getEntry(id, &dataType, data, &len) == SNMP_SUCCESS))
         {
-            id = OID_NOT_FOUND;
-            seglen = name.nstart - name.start;
-            COPY_SEGMENT(name);
-            size = seglen;
+            if (reqType == GET_NEXT_REQUEST)
+            {
+                uint8_t oid[MAX_OID];
+                uint8_t oidLen;
+                getOID(id, oid, &oidLen);
+                wValue(&w, ASN_OBJECTID, oid, oidLen);
+            }
+            else
+            {
+                wBytes(&w, name.start, name.total);
+            }
+            wValue(&w, dataType, data, len);
         }
         else
         {
-            request_msg.index += name.nstart - name.start;
-
-            getOID(id, &response_msg.buffer[response_msg.index + 2], &response_msg.buffer[response_msg.index + 1]);
-
-            seglen = response_msg.buffer[response_msg.index + 1] + 2;
-            response_msg.index += seglen;
-            size = seglen;
+            // no such name: the variable goes back unchanged
+            wBytes(&w, name.start, name.total);
+            wBytes(&w, value.start, value.total);
         }
+        wEnd(&w, seq);
     }
 
-    parseTLV(request_msg.buffer, request_msg.index, &value);
+    wEnd(&w, list);
+    wEnd(&w, pdu);
+    wEnd(&w, outer);
 
-    if (id != OID_NOT_FOUND)
-    {
-        uint8_t dataType;
-        uint8_t len;
-
-        if ((reqType == GET_REQUEST) || (reqType == GET_NEXT_REQUEST))
-        {
-            getEntry(id, &dataType, &response_msg.buffer[response_msg.index + 2], &len);
-
-            response_msg.buffer[response_msg.index] = dataType;
-            response_msg.buffer[response_msg.index + 1] = len;
-            seglen = (2 + len);
-            response_msg.index += seglen;
-
-            request_msg.index += (value.nstart - value.start);
-        }
-        else if (reqType == SET_REQUEST)
-        {
-            setEntry(id, &request_msg.buffer[value.vstart], value.len, request_msg.buffer[value.start], index);
-            seglen = value.nstart - value.start;
-            COPY_SEGMENT(value);
-        }
-    }
-    else
-    {
-        seglen = value.nstart - value.start;
-        COPY_SEGMENT(value);
-
-        errorIndex = index;
-        errorStatus = NO_SUCH_NAME;
-    }
-
-    size += seglen;
-    return size;
+    if (w.ok)
+        response_msg.index = w.pos;
+    return w.ok;
 }
 
-int32_t parseSequence(int32_t reqType, int32_t index)
-{
-    int32_t seglen;
-    tlvStructType seq;
-    int32_t size = 0, respLoc;
-
-    parseTLV(request_msg.buffer, request_msg.index, &seq);
-
-    if (request_msg.buffer[seq.start] != SNMP_SEQUENCE)
-        return -1;
-
-    seglen = seq.vstart - seq.start;
-    respLoc = response_msg.index;
-    COPY_SEGMENT(seq);
-
-    size = parseVarBind(reqType, index);
-    insertRespLen(seq.start, respLoc, size);
-    size += seglen;
-
-    return size;
-}
-
-int32_t parseSequenceOf(int32_t reqType)
-{
-    int32_t seglen;
-    tlvStructType seqof;
-    int32_t size = 0, respLoc;
-    int32_t index = 0;
-
-    parseTLV(request_msg.buffer, request_msg.index, &seqof);
-
-    if (request_msg.buffer[seqof.start] != SNMP_SEQUENCE_OF)
-        return -1;
-
-    seglen = seqof.vstart - seqof.start;
-    respLoc = response_msg.index;
-    COPY_SEGMENT(seqof);
-
-    while (request_msg.index < request_msg.len)
-    {
-        size += parseSequence(reqType, index++);
-    }
-
-    insertRespLen(seqof.start, respLoc, size);
-
-    return size;
-}
-
-int32_t parseRequest()
-{
-    int32_t ret, seglen;
-    tlvStructType snmpreq, requestid, errStatus, errIndex;
-    int32_t size = 0, respLoc, reqType;
-
-    parseTLV(request_msg.buffer, request_msg.index, &snmpreq);
-
-    reqType = request_msg.buffer[snmpreq.start];
-
-    if (!VALID_REQUEST(reqType))
-        return -1;
-
-    seglen = snmpreq.vstart - snmpreq.start;
-    respLoc = snmpreq.start;
-    size += seglen;
-    COPY_SEGMENT(snmpreq);
-
-    response_msg.buffer[snmpreq.start] = GET_RESPONSE;
-
-    // Insert the Request ID
-    parseTLV(request_msg.buffer, request_msg.index, &requestid);
-    seglen = requestid.nstart - requestid.start;
-    size += seglen;
-    COPY_SEGMENT(requestid);
-
-    // Insert the error status
-    parseTLV(request_msg.buffer, request_msg.index, &errStatus);
-    seglen = errStatus.nstart - errStatus.start;
-    size += seglen;
-    COPY_SEGMENT(errStatus);
-
-    parseTLV(request_msg.buffer, request_msg.index, &errIndex);
-    seglen = errIndex.nstart - errIndex.start;
-    size += seglen;
-    COPY_SEGMENT(errIndex);
-
-    ret = parseSequenceOf(reqType);
-    if (ret == -1)
-        return -1;
-    else
-        size += ret;
-
-    insertRespLen(snmpreq.start, respLoc, size);
-
-    if (errorStatus)
-    {
-        response_msg.buffer[errStatus.vstart] = errorStatus;
-        response_msg.buffer[errIndex.vstart] = errorIndex + 1;
-    }
-
-    return size;
-}
-
-int16_t parseCommunity()
-{
-    int32_t seglen;
-    tlvStructType community;
-    int16_t size = 0;
-
-    parseTLV(request_msg.buffer, request_msg.index, &community);
-
-    if (!((request_msg.buffer[community.start] == ASN_OCTETSTRING) && (community.len == COMMUNITY_SIZE)))
-    {
-        return -1;
-    }
-
-    if (!memcmp(&request_msg.buffer[community.vstart], (int8_t *)COMMUNITY, COMMUNITY_SIZE))
-    {
-        seglen = community.nstart - community.start;
-        size += seglen;
-        COPY_SEGMENT(community);
-        size += parseRequest();
-    }
-    else
-    {
-        return -1;
-    }
-
-    return size;
-}
-
-int16_t parseVersion()
-{
-    int16_t size = 0, seglen;
-    tlvStructType tlv;
-
-    parseTLV(request_msg.buffer, request_msg.index, &tlv);
-
-    if (!((request_msg.buffer[tlv.start] == ASN_INTEGER) && (request_msg.buffer[tlv.vstart] == SNMP_V1)))
-        return -1;
-
-    seglen = tlv.nstart - tlv.start;
-    size += seglen;
-    COPY_SEGMENT(tlv);
-    size = parseCommunity();
-
-    if (size == -1)
-        return size;
-    else
-        return (size + seglen);
-}
-
+// Parses the request in request_msg and writes the response to response_msg.
+// Returns 0 if there is a response to send, -1 if the request is dropped.
 int8_t parse_snmp()
 {
-    int16_t size = 0, seglen, respLoc;
-    tlvStructType tlv;
+    const uint8_t *req = request_msg.buffer;
+    uint16_t end = request_msg.len;
+    uint16_t pos = 0;
+    tlvRef msg, ver, comm, pdu, reqid, errst, erri, list;
+    uint16_t p, q, listPos, listEnd;
+    uint8_t errStatus = 0, errIndex = 0, index = 0;
 
-    parseTLV(request_msg.buffer, request_msg.index, &tlv);
+    if (!readTLV(req, end, &pos, &msg) || (msg.tag != SNMP_SEQUENCE))
+        return -1;
+    p = msg.val - req;
+    end = p + msg.len;
 
-    if (request_msg.buffer[tlv.start] != SNMP_SEQUENCE)
+    if (!readTLV(req, end, &p, &ver) || (ver.tag != ASN_INTEGER) || (ver.len != 1) || (ver.val[0] != SNMP_V1))
+        return -1;
+    if (!readTLV(req, end, &p, &comm) || (comm.tag != ASN_OCTETSTRING) || (comm.len != COMMUNITY_SIZE) ||
+        memcmp(comm.val, COMMUNITY, COMMUNITY_SIZE))
+        return -1;
+    if (!readTLV(req, end, &p, &pdu) || !VALID_REQUEST(pdu.tag))
         return -1;
 
-    seglen = tlv.vstart - tlv.start;
-    respLoc = tlv.start; // Save this location to fill in the final response size
-    COPY_SEGMENT(tlv);
-
-    size = parseVersion(); // parseVersion then calls community which in turns call the next TLV parsing etc...
-
-    if (size == -1)
+    q = pdu.val - req;
+    end = q + pdu.len;
+    if (!readTLV(req, end, &q, &reqid) || (reqid.tag != ASN_INTEGER))
         return -1;
-    else
-        size += seglen;
+    if (!readTLV(req, end, &q, &errst) || !readTLV(req, end, &q, &erri))
+        return -1;
+    if (!readTLV(req, end, &q, &list) || (list.tag != SNMP_SEQUENCE_OF))
+        return -1;
+    listPos = list.val - req;
+    listEnd = listPos + list.len;
 
-    insertRespLen(tlv.start, respLoc, size);
+    // first pass: the first variable that has no answer sets the error status
+    for (p = listPos; p < listEnd;)
+    {
+        tlvRef name, value;
+        if (!readVarBind(req, listEnd, &p, &name, &value))
+            return -1;
+        index++;
+        if ((errStatus == 0) && (lookupEntry(pdu.tag, &name) == OID_NOT_FOUND))
+        {
+            errStatus = NO_SUCH_NAME;
+            errIndex = index;
+        }
+    }
 
-    return 0;
+    if (buildResponse(&ver, &comm, &reqid, pdu.tag, listPos, listEnd, errStatus, errIndex))
+        return 0;
+
+    // the answer does not fit: tooBig, with an empty variable list
+    if (buildResponse(&ver, &comm, &reqid, pdu.tag, listPos, listEnd, TOO_BIG, 0))
+        return 0;
+
+    return -1;
 }
 
 /**
@@ -752,7 +704,6 @@ void snmp_loop(W5500_chip *W5500)
         }
         request_msg.index = 0; 
         response_msg.index = 0;
-        errorStatus = errorIndex = 0;
         memset(response_msg.buffer, 0x00, MAX_SNMPMSG_LEN);
 
         ret = parse_snmp();

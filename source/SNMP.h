@@ -56,7 +56,7 @@
 
 // We are limiting the max size here to save as much RAM as possible, those
 // could be extended on a larger system
-#define MAX_OID          12
+#define MAX_OID          13
 #define MAX_STRING       16
 #define MAX_SNMPMSG_LEN 384
 
@@ -76,16 +76,11 @@
 #define INVALID_ENTRY_ID   -4
 #define INVALID_DATA_TYPE  -5
 
+#define TOO_BIG             1
 #define NO_SUCH_NAME        2
 #define BAD_VALUE           3
 
 
-#define COPY_SEGMENT(x) \
-{ \
-    request_msg.index += seglen; \
-    memcpy(&response_msg.buffer[response_msg.index], &request_msg.buffer[x.start], seglen ); \
-    response_msg.index += seglen; \
-}
 
 // Macros: SNMPv1 request validation checker
 #define VALID_REQUEST(x)			((x == GET_REQUEST) || (x == GET_NEXT_REQUEST) || (x == SET_REQUEST))

@@ -9,11 +9,17 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("127.0.0.1", port))
 while True:
     data, addr = sock.recvfrom(2048)
+    if os.environ.get("BRIDGE_TRACE"):
+        print("request", data.hex(), flush=True)
     p.stdin.write(data.hex() + "\n")
     p.stdin.flush()
     while True:
         line = p.stdout.readline().strip()
         if line.startswith("RSP:"):
             break
-    if not line.startswith("RSP:ERR"):
+    if line.startswith("RSP:ERR"):
+        print("no response for", data.hex(), flush=True)
+    else:
+        if os.environ.get("BRIDGE_TRACE"):
+            print("response", line[4:], flush=True)
         sock.sendto(bytes.fromhex(line[4:]), addr)

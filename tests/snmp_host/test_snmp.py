@@ -5,7 +5,11 @@ BIN = os.environ["SNMP_HOST_BIN"]
 
 
 def enc_len(n):
-    return bytes([n]) if n < 128 else bytes([0x81, n])
+    if n < 128:
+        return bytes([n])
+    if n < 256:
+        return bytes([0x81, n])
+    return bytes([0x82, n >> 8, n & 0xFF])
 
 
 def tlv(tag, body):
@@ -41,6 +45,37 @@ def request(kind, oid, community=b"public", version=0, setval=None):
     vb = tlv(0x30, tlv(0x06, enc_oid(oid)) + (tlv(0x04, setval) if setval is not None else tlv(0x05, b"")))
     body = tlv(0x02, b"\x01") + tlv(0x02, b"\x00") + tlv(0x02, b"\x00") + tlv(0x30, vb)
     return tlv(0x30, tlv(0x02, bytes([version])) + tlv(0x04, community) + tlv(pdu, body))
+
+
+def request_multi(kind, oids, community=b"public"):
+    pdu = {"get": 0xA0, "next": 0xA1}[kind]
+    vbs = b"".join(tlv(0x30, tlv(0x06, enc_oid(o)) + tlv(0x05, b"")) for o in oids)
+    body = tlv(0x02, b"\x07") + tlv(0x02, b"\x00") + tlv(0x02, b"\x00") + tlv(0x30, vbs)
+    return tlv(0x30, tlv(0x02, b"\x00") + tlv(0x04, community) + tlv(pdu, body))
+
+
+def parse_multi(raw):
+    """Returns (error status, error index, [(oid, tag, value)]) and checks every length."""
+    tag, body, end = read_tlv(raw, 0)
+    assert tag == 0x30 and end == len(raw), "outer length"
+    _, _, i = read_tlv(body, 0)
+    _, _, i = read_tlv(body, i)
+    ptag, pbody, pend = read_tlv(body, i)
+    assert ptag == 0xA2 and pend == len(body), "pdu length"
+    j = 0
+    _, _, j = read_tlv(pbody, j)
+    _, est, j = read_tlv(pbody, j)
+    _, eidx, j = read_tlv(pbody, j)
+    ltag, lbody, lend = read_tlv(pbody, j)
+    assert ltag == 0x30 and lend == len(pbody), "list length"
+    out, k = [], 0
+    while k < len(lbody):
+        _, vb, k = read_tlv(lbody, k)
+        _, oid, m = read_tlv(vb, 0)
+        vtag, val, mend = read_tlv(vb, m)
+        assert mend == len(vb), "varbind length"
+        out.append((dec_oid(oid), vtag, val))
+    return int.from_bytes(est, "big"), int.from_bytes(eidx, "big"), out
 
 
 def read_tlv(b, i):
@@ -93,6 +128,18 @@ class Agent:
         if line.startswith("ERR"):
             return line
         return parse_response(bytes.fromhex(line))
+
+    def ask_raw(self, packet):
+        self.p.stdin.write(packet.hex() + "\n")
+        self.p.stdin.flush()
+        while True:
+            line = self.p.stdout.readline().strip()
+            if line.startswith("RSP:"):
+                break
+            if not line:
+                raise RuntimeError("driver exited: " + self.p.stderr.read()[:600])
+        line = line[4:]
+        return None if line.startswith("ERR") else bytes.fromhex(line)
 
     def close(self):
         self.p.stdin.close()
@@ -159,6 +206,44 @@ check("short and garbage packets survived", True)
 r = a.ask("get", "1.3.6.1.2.1.1.1.0")
 check("agent still answers after garbage", not isinstance(r, str) and value(r[2], r[3]) == "NPR-70", r)
 
+# several variables in one request, the response is longer than 127 bytes and longer than the request
+cols = [B + ".10.1.%d.1" % c for c in (1, 2, 3, 4, 5)]
+raw = a.ask_raw(request_multi("get", cols))
+check("multi get: answered", raw is not None)
+if raw:
+    est, eidx, vbs = parse_multi(raw)
+    check("multi get: response is longer than 127 bytes", len(raw) > 127, len(raw))
+    check("multi get: no error", est == 0 and eidx == 0, (est, eidx))
+    check("multi get: values", [(o, value(t, v)) for o, t, v in vbs] ==
+          [(cols[0], 1), (cols[1], "DL6ABE-71"), (cols[2], 10), (cols[3], 80), (cols[4], 250)], vbs)
+raw = a.ask_raw(request_multi("get", [cols[0], cols[1], "1.3.6.1.2.1.1.9.9", cols[2]]))
+est, eidx, vbs = parse_multi(raw) if raw else (None, None, [])
+check("multi get: missing name gives noSuchName at its index", (est, eidx) == (2, 3), (est, eidx))
+check("multi get: the other variables are answered", len(vbs) == 4 and value(vbs[3][1], vbs[3][2]) == 10, vbs)
+raw = a.ask_raw(request_multi("next", [B + ".10.1.1", B + ".10.1.2", B + ".10.1.3"]))
+est, eidx, vbs = parse_multi(raw) if raw else (None, None, [])
+check("multi get-next (what snmptable sends)", est == 0 and [o for o, _, _ in vbs] ==
+      [B + ".10.1.1.0", B + ".10.1.2.0", B + ".10.1.3.0"], (est, vbs))
+raw = a.ask_raw(request_multi("get", [B + ".10.1.2.1"] * 18))
+est, eidx, vbs = parse_multi(raw) if raw else (None, None, [])
+check("response too big for the buffer: tooBig, empty list", (est, eidx, vbs) == (1, 0, []), (est, eidx, len(vbs)))
+
+# GET-NEXT from OIDs that are no entry: the next greater entry, not the first one
+for start, want in (
+        ("1.3.6.1.2.1.1", "1.3.6.1.2.1.1.1.0"),
+        ("1.3.6.1.2.1.1.1.0.5", "1.3.6.1.2.1.1.3.0"),
+        (B + ".10", B + ".10.1.1.0"),
+        (B + ".10.1", B + ".10.1.1.0"),
+        (B + ".10.1.1", B + ".10.1.1.0"),
+        (B + ".10.1.1.6", B + ".10.1.2.0"),
+        (B + ".11", B + ".11.0"),
+        ("1.3.6.1.4.1.54539.99", B + ".1.0"),
+        ("1.3.6.1.4.1.54540", None),
+        (B + ".11.0", None)):
+    r = a.ask("next", start)
+    got = None if (isinstance(r, str) or r[0]) else r[1]
+    check("get-next from %s" % start, got == want, got)
+
 entries, why = walk(a)
 oids = [o for o, _ in entries]
 print("walk steps:", len(entries), "stop:", why)
@@ -167,14 +252,14 @@ check("walk is strictly increasing", all(tuple(map(int, x.split("."))) < tuple(m
                                          for x, y in zip(oids, oids[1:])))
 check("walk ends with noSuchName", why.startswith("error status 2"), why)
 d = dict(entries)
-check("table: client 1 connected", d.get(B + ".10.1.1") == 1, d.get(B + ".10.1.1"))
-check("table: client 2 not connected", d.get(B + ".10.1.2") == 0, d.get(B + ".10.1.2"))
-check("table: callsign client 1", d.get(B + ".10.2.1") == "DL6ABE-71", d.get(B + ".10.2.1"))
-check("table: callsign client 3", d.get(B + ".10.2.3") == "DL6ABE-72", d.get(B + ".10.2.3"))
-check("table: callsign free slot empty", d.get(B + ".10.2.0") == "", d.get(B + ".10.2.0"))
-check("table: TA client 3 = 25", d.get(B + ".10.3.3") == 25, d.get(B + ".10.3.3"))
-check("table: RSSI client 1 = 80", d.get(B + ".10.4.1") == 0x50, d.get(B + ".10.4.1"))
-check("table: BER client 3 = 1000", d.get(B + ".10.5.3") == 1000, d.get(B + ".10.5.3"))
+check("table: client 1 connected", d.get(B + ".10.1.1.1") == 1, d.get(B + ".10.1.1.1"))
+check("table: client 2 not connected", d.get(B + ".10.1.1.2") == 0, d.get(B + ".10.1.1.2"))
+check("table: callsign client 1", d.get(B + ".10.1.2.1") == "DL6ABE-71", d.get(B + ".10.1.2.1"))
+check("table: callsign client 3", d.get(B + ".10.1.2.3") == "DL6ABE-72", d.get(B + ".10.1.2.3"))
+check("table: callsign free slot empty", d.get(B + ".10.1.2.0") == "", d.get(B + ".10.1.2.0"))
+check("table: TA client 3 = 25", d.get(B + ".10.1.3.3") == 25, d.get(B + ".10.1.3.3"))
+check("table: RSSI client 1 = 80", d.get(B + ".10.1.4.1") == 0x50, d.get(B + ".10.1.4.1"))
+check("table: BER client 3 = 1000", d.get(B + ".10.1.5.3") == 1000, d.get(B + ".10.1.5.3"))
 check("firmware version", d.get(B + ".11.0") == "261011G", d.get(B + ".11.0"))
 check("reset reason code", d.get(B + ".8.0") == 4, d.get(B + ".8.0"))
 check("reset reason text", d.get(B + ".9.0") == "iwdg", d.get(B + ".9.0"))

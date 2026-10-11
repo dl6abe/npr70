@@ -5,12 +5,13 @@ WIZKER-IO-MIB DEFINITIONS ::= BEGIN
 --
 
 IMPORTS
-    MODULE-IDENTITY, OBJECT-TYPE, Integer32,
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Gauge32,
     enterprises FROM SNMPv2-SMI
+    DisplayString FROM SNMPv2-TC
 ;
 
 wizkersIO MODULE-IDENTITY
-    LAST-UPDATED "202005160000Z"
+    LAST-UPDATED "202610110000Z"
     ORGANIZATION "www.wizkers.io"
     CONTACT-INFO    
 	 "postal:   Ed Lafargue
@@ -21,6 +22,10 @@ wizkersIO MODULE-IDENTITY
     REVISION     "202005160000Z"
     DESCRIPTION
     	"MIB for the Wizkers.io products"
+    REVISION     "202610110000Z"
+    DESCRIPTION
+    	"NPR-70: added the reset reason, the firmware version and the
+         table of the clients that a master keeps"
     ::= { enterprises 54539 } 
 
 
@@ -104,5 +109,125 @@ npr70ModemDownlinkBER OBJECT-TYPE
     Value in percent calculated as value / 500."
     DEFVAL { 0 }
     ::= { npr70Modem 7 }
+
+npr70ModemResetReason OBJECT-TYPE
+    SYNTAX      INTEGER {
+                    unknown(0),
+                    powerOn(1),
+                    pin(2),
+                    software(3),
+                    iwdg(4),
+                    wwdg(5),
+                    lowPower(6),
+                    optionBytes(7)
+                }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Why the modem restarted the last time, read from the reset flags
+    of the processor. powerOn also covers a brown-out, the chip does
+    not tell them apart. software is the reboot command."
+    ::= { npr70Modem 8 }
+
+npr70ModemResetReasonText OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..15))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"The reset reason as text, the same as npr70ModemResetReason."
+    ::= { npr70Modem 9 }
+
+--
+-- Clients of a master. The master keeps these values, a client
+-- fills only the entries it learns from the master. The row index
+-- is the client ID (0 to 6), the same number that 'who' prints.
+--
+
+npr70ClientTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF Npr70ClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+	"One row per client slot of the master."
+    ::= { npr70Modem 10 }
+
+npr70ClientEntry OBJECT-TYPE
+    SYNTAX      Npr70ClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+	"Values of one client slot."
+    INDEX       { npr70ClientId }
+    ::= { npr70ClientTable 1 }
+
+Npr70ClientEntry ::= SEQUENCE {
+    npr70ClientId           Integer32,
+    npr70ClientConnected    INTEGER,
+    npr70ClientCallsign     DisplayString,
+    npr70ClientDistance     Gauge32,
+    npr70ClientUplinkRSSI   Gauge32,
+    npr70ClientUplinkBER    Gauge32
+}
+
+npr70ClientId OBJECT-TYPE
+    SYNTAX      Integer32 (0..6)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+	"Client slot, the client ID. Only the index of the row, the agent
+    has no value to read here."
+    ::= { npr70ClientEntry 6 }
+
+npr70ClientConnected OBJECT-TYPE
+    SYNTAX      INTEGER { no(0), yes(1) }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Whether a client is connected in this slot."
+    ::= { npr70ClientEntry 1 }
+
+npr70ClientCallsign OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..15))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Callsign of the client, empty if the slot is free."
+    ::= { npr70ClientEntry 2 }
+
+npr70ClientDistance OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Raw calculated link distance to the client.
+    Value in km is : 0.15 * value."
+    ::= { npr70ClientEntry 3 }
+
+npr70ClientUplinkRSSI OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Uplink RSSI raw value as the master receives the client.
+    dBm value is calculated as value / 2 - 136."
+    ::= { npr70ClientEntry 4 }
+
+npr70ClientUplinkBER OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Uplink bit error rate raw value.
+    Value in percent calculated as value / 500."
+    ::= { npr70ClientEntry 5 }
+
+npr70ModemFirmwareVersion OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..15))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Firmware version: YYMMDD of the build and the build hour as a
+    letter (A = 00 to X = 23), for example 261011G."
+    ::= { npr70Modem 11 }
 
 END
