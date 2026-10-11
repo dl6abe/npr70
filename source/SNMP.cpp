@@ -213,9 +213,14 @@ void snmpGetResetReasonText(void *ptr, uint8_t *len)
     *len = strlen(out);
 }
 
+// Seconds since snmp_init() set the clock to 0 at the start, same source for SNMP and the console
+uint32_t snmp_uptime_seconds(void)
+{
+    return (uint32_t)time(NULL);
+}
+
 void snmpGetUptime(void *ptr, uint8_t *len) {
-    time_t seconds = time(NULL);
-    *(uint32_t *)ptr = (uint32_t)(seconds*100); // Time in 100th of a second
+    *(uint32_t *)ptr = snmp_uptime_seconds() * 100; // Time in 100th of a second
     *len = 4; 
 }
 

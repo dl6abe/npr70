@@ -255,6 +255,7 @@ static void HMI_print_help(void) {
 	HMI_printf("  clear stats         set the received frame counters back to 0\r\n");
 	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
 	HMI_printf("  version             firmware version and band\r\n");
+	HMI_printf("  uptime              time since the start of the modem\r\n");
 	HMI_printf("  reboot              restart the modem\r\n");
 	HMI_printf("  exit                close the telnet session (logout works as well)\r\n");
 	HMI_printf("Radio parameters:\r\n");
@@ -366,6 +367,11 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			} else {
 				HMI_printf("ERROR: use 'clear stats'.\r\nready> ");
 			}
+		}
+		if (strcmp(loc_command_str, "uptime") == 0) {
+			command_understood = 1;
+			uint32_t up = snmp_uptime_seconds(); // the clock SNMP sysUpTime uses
+			HMI_printf("uptime: %lu days %02lu:%02lu:%02lu\r\nready> ", (unsigned long)(up / 86400), (unsigned long)((up / 3600) % 24), (unsigned long)((up / 60) % 60), (unsigned long)(up % 60));
 		}
 		if (strcmp(loc_command_str, "version") == 0) {
 			command_understood = 1;

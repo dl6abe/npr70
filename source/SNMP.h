@@ -135,5 +135,6 @@ void snmpGetFecFixed(void *ptr, uint8_t *len);
 void snmpGetFecLost(void *ptr, uint8_t *len);
 void snmpGetSegGap(void *ptr, uint8_t *len);
 const char* snmp_reset_reason_text(unsigned char code);
+uint32_t snmp_uptime_seconds(void);
 
 #endif
