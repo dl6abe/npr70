@@ -17,6 +17,10 @@ unsigned short int G_downlink_BER = 0;
 char CONF_radio_addr_table_status[radio_addr_table_size] = {0, 1, 0, 1, 0, 0, 0};
 char CONF_radio_addr_table_callsign[radio_addr_table_size][16] = {{0}, {0, 0, 'D','L','6','A','B','E','-','7','1',0}, {0}, {0, 0, 'D','L','6','A','B','E','-','7','2',0}, {0}, {0}, {0}};
 unsigned char G_reset_reason = 0;
+unsigned int G_rx_fec_ok = 1000;
+unsigned int G_rx_fec_fixed = 30;
+unsigned int G_rx_fec_lost = 5;
+unsigned int G_rx_seg_gap = 0x80000001u; // above 2^31: must not turn negative
 const char FW_VERSION_ID[] = "261011G";
 char CONF_radio_my_callsign[16] = {0, 0, 'D','L','6','A','B','E','-','7','0',0};
 

@@ -884,9 +884,14 @@ void HMI_print_who(void) {
 				loc_TA = (float)TDMA_table_TA[i];
 			}
 			if (loc_RSSI > 0) {
-				HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
+				HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%% ", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
 			} else { // no measurement yet, a raw 0 would read as -136 dBm
-				HMI_printf ("TA:%.1fkm RSSI:n/a ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, ((float)G_radio_addr_table_BER[i])/500);
+				HMI_printf ("TA:%.1fkm RSSI:n/a ERR:%.2f%% ", 0.15*loc_TA, ((float)G_radio_addr_table_BER[i])/500);
+			}
+			if (is_TDMA_master) { // frames received from this client: ok / repaired / lost
+				HMI_printf ("FEC ok:%u fixed:%u lost:%u\x1b[K\r\n", G_rx_fec_client_ok[i], G_rx_fec_client_fixed[i], G_rx_fec_client_lost[i]);
+			} else {
+				HMI_printf ("\x1b[K\r\n");
 			}
 		} else {
 			HMI_printf ("                                                            \x1b[K\r\n");
@@ -925,7 +930,10 @@ void HMI_print_status(void) {
 	temp_string[12]=0x1B;
 	temp_string[13]=0x5B;
 	temp_string[14]=0x41;
-	temp_string[15]=0x00;
+	temp_string[15]=0x1B;
+	temp_string[16]=0x5B;
+	temp_string[17]=0x41;
+	temp_string[18]=0x00;
 	//temp_string[15]=0x1B;
 	//temp_string[16]=0x5B;
 	//temp_string[17]=0x41;
@@ -955,6 +963,7 @@ void HMI_print_status(void) {
 		HMI_printf("   RX_Eth_IPv4 %i ;TX_radio_IPv4 %i ; RX_radio_IPv4 %i   \r\n", RX_Eth_IPv4_counter, TX_radio_IPv4_counter, RX_radio_IPv4_counter);
 		//HMI_printf("   RX_Eth_IPv4 %i ;TX_radio_IPv4 %i ; RX_radio_IPv4 %i   \r\n", RX_Eth_IPv4_counter, TX_radio_IPv4_counter, (TX_buff_ext_WR_pointer - TX_buff_ext_RD_pointer)*128);//!!!! debug FIFO filling
 	}
+	HMI_printf("   RX frames FEC ok:%u fixed:%u lost:%u seg_gap:%u   \r\n", G_rx_fec_ok, G_rx_fec_fixed, G_rx_fec_lost, G_rx_seg_gap);
 	if ( (!is_TDMA_master) && (RSSI_stat_pkt_nb > 0) ) {
 		//HMI_printf("RSSI: %i\r\nCTRL+c to exit...\r\n", (RSSI_total_stat / RSSI_stat_pkt_nb) );
 		HMI_printf("   DOWNLINK - bandwidth:%.1f RSSI:%.1f ERR:%.2f%%    \r\n", loc_downlink_bw, ((float)G_downlink_RSSI/256/2-136), ((float)G_downlink_BER)/500); // /500

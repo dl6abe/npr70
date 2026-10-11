@@ -136,6 +136,7 @@ void radio_RX_FIFO_dequeue (W5500_chip* W5500) {
 		size_wo_FEC = FEC_decode(data_RX, size_w_FEC, &loc_micro_BER);
 		//if (loc_micro_BER>0) {printf("err micro%i\r\n", loc_micro_BER);}
 		radio_save_RSSI_BER (client_ID_byte, is_downlink, RSSI, loc_micro_BER); 
+		radio_count_fec (client_ID_byte, is_downlink, loc_micro_BER);
 		//printf("RSSI:%i BER:%i\r\n", RSSI, loc_micro_BER);
 		protocol = 0;
 		if ( size_wo_FEC > 0) { 
@@ -215,6 +216,7 @@ void radio_RX_FIFO_dequeue (W5500_chip* W5500) {
 					} 
 					else { //continuity error
 						size_received[LID] = 0;
+						G_rx_seg_gap++;
 					}
 					prev_seg_counter[LID] = seg_counter;
 					
@@ -731,6 +733,28 @@ void radio_flush_TX_FIFO(void) {
 	TX_buff_ext_WR_pointer=0;
 	TX_buff_ext_RD_pointer=0;
 	TX_buff_ext_last_ready=0;
+}
+
+// Counts each received frame once: bad_blocks is 0 (ok), 1 (repaired) or more (lost)
+void radio_count_fec (unsigned char client_byte, unsigned char is_downlink, unsigned int bad_blocks) {
+	unsigned char client_ID = client_byte & 0x7F;
+	
+	if (bad_blocks == 0) {
+		G_rx_fec_ok++;
+	} else if (bad_blocks == 1) {
+		G_rx_fec_fixed++;
+	} else {
+		G_rx_fec_lost++;
+	}
+	if ( (is_TDMA_master) && (is_downlink == 0) && (parity_bit_check[client_byte]) && (client_ID < radio_addr_table_size) ) {
+		if (bad_blocks == 0) {
+			G_rx_fec_client_ok[client_ID]++;
+		} else if (bad_blocks == 1) {
+			G_rx_fec_client_fixed[client_ID]++;
+		} else {
+			G_rx_fec_client_lost[client_ID]++;
+		}
+	}
 }
 
 void radio_save_RSSI_BER (unsigned char client_byte, unsigned char is_downlink, unsigned char RSSI_loc, unsigned int micro_BER) {

@@ -239,7 +239,9 @@ for start, want in (
         (B + ".11", B + ".11.0"),
         ("1.3.6.1.4.1.54539.99", B + ".1.0"),
         ("1.3.6.1.4.1.54540", None),
-        (B + ".11.0", None)):
+        (B + ".11.0", B + ".12.1.0"),
+        (B + ".12", B + ".12.1.0"),
+        (B + ".12.4.0", None)):
     r = a.ask("next", start)
     got = None if (isinstance(r, str) or r[0]) else r[1]
     check("get-next from %s" % start, got == want, got)
@@ -261,6 +263,10 @@ check("table: TA client 3 = 25", d.get(B + ".10.1.3.3") == 25, d.get(B + ".10.1.
 check("table: RSSI client 1 = 80", d.get(B + ".10.1.4.1") == 0x50, d.get(B + ".10.1.4.1"))
 check("table: BER client 3 = 1000", d.get(B + ".10.1.5.3") == 1000, d.get(B + ".10.1.5.3"))
 check("firmware version", d.get(B + ".11.0") == "261011G", d.get(B + ".11.0"))
+check("rx frames ok", d.get(B + ".12.1.0") == 1000, d.get(B + ".12.1.0"))
+check("rx frames fixed", d.get(B + ".12.2.0") == 30, d.get(B + ".12.2.0"))
+check("rx frames lost", d.get(B + ".12.3.0") == 5, d.get(B + ".12.3.0"))
+check("rx segment gap above 2^31 stays unsigned", d.get(B + ".12.4.0") == 0x80000001, d.get(B + ".12.4.0"))
 check("reset reason code", d.get(B + ".8.0") == 4, d.get(B + ".8.0"))
 check("reset reason text", d.get(B + ".9.0") == "iwdg", d.get(B + ".9.0"))
 check("master scalar RSSI is 0, not garbage", d.get(B + ".4.0") == 0, d.get(B + ".4.0"))

@@ -120,6 +120,11 @@ static const dataEntryType snmpData[] =
         SNMP_CLIENT_COLUMN(5, ASN_GAUGE, snmpGetClientErr),
         //               .11.0            // Firmware version (text)
         {11, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 11, 0}, ASN_OCTETSTRING,0, {}, snmpGetFirmwareVersion, NULL },
+        //               .12.1.0 .. .12.4.0   // Received radio frames since start: FEC ok, repaired, lost; IP packets lost to a missing segment
+        {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 12, 1, 0}, ASN_COUNTER,0, {}, snmpGetFecOk, NULL },
+        {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 12, 2, 0}, ASN_COUNTER,0, {}, snmpGetFecFixed, NULL },
+        {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 12, 3, 0}, ASN_COUNTER,0, {}, snmpGetFecLost, NULL },
+        {12, {0x2b, 6, 1, 4, 1, 0x83, 0xaa, 0x0b, 100, 12, 4, 0}, ASN_COUNTER,0, {}, snmpGetSegGap, NULL },
 
 };
 
@@ -165,6 +170,26 @@ void snmpGetSysName(void *ptr, uint8_t *len)
     strncpy(out, CONF_radio_my_callsign + 2, MAX_STRING - 1);
     out[MAX_STRING - 1] = 0;
     *len = strlen(out);
+}
+
+void snmpGetFecOk(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, G_rx_fec_ok);
+}
+
+void snmpGetFecFixed(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, G_rx_fec_fixed);
+}
+
+void snmpGetFecLost(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, G_rx_fec_lost);
+}
+
+void snmpGetSegGap(void *ptr, uint8_t *len)
+{
+    snmpGetVar(ptr, len, G_rx_seg_gap);
 }
 
 void snmpGetFirmwareVersion(void *ptr, uint8_t *len)

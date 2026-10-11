@@ -130,6 +130,10 @@ void snmpGetSysName(void *ptr, uint8_t *len);
 void snmpGetFirmwareVersion(void *ptr, uint8_t *len);
 void snmpGetResetReason(void *ptr, uint8_t *len);
 void snmpGetResetReasonText(void *ptr, uint8_t *len);
+void snmpGetFecOk(void *ptr, uint8_t *len);
+void snmpGetFecFixed(void *ptr, uint8_t *len);
+void snmpGetFecLost(void *ptr, uint8_t *len);
+void snmpGetSegGap(void *ptr, uint8_t *len);
 const char* snmp_reset_reason_text(unsigned char code);
 
 #endif

@@ -14,6 +14,10 @@ extern unsigned short int G_downlink_BER;
 extern char CONF_radio_addr_table_status[radio_addr_table_size];
 extern char CONF_radio_addr_table_callsign[radio_addr_table_size][16];
 extern unsigned char G_reset_reason;
+extern unsigned int G_rx_fec_ok;
+extern unsigned int G_rx_fec_fixed;
+extern unsigned int G_rx_fec_lost;
+extern unsigned int G_rx_seg_gap;
 extern char CONF_radio_my_callsign[16];
 extern const char FW_VERSION_ID[];
 #define FW_VERSION FW_VERSION_ID

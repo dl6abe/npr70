@@ -5,7 +5,7 @@ WIZKER-IO-MIB DEFINITIONS ::= BEGIN
 --
 
 IMPORTS
-    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Gauge32,
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Gauge32, Counter32,
     enterprises FROM SNMPv2-SMI
     DisplayString FROM SNMPv2-TC
 ;
@@ -24,8 +24,9 @@ wizkersIO MODULE-IDENTITY
     	"MIB for the Wizkers.io products"
     REVISION     "202610110000Z"
     DESCRIPTION
-    	"NPR-70: added the reset reason, the firmware version and the
-         table of the clients that a master keeps"
+    	"NPR-70: added the reset reason, the firmware version, the
+         table of the clients that a master keeps and the counters
+         of the received radio frames"
     ::= { enterprises 54539 } 
 
 
@@ -229,5 +230,43 @@ npr70ModemFirmwareVersion OBJECT-TYPE
 	"Firmware version: YYMMDD of the build and the build hour as a
     letter (A = 00 to X = 23), for example 261011G."
     ::= { npr70Modem 11 }
+
+npr70RxFrames OBJECT IDENTIFIER ::= { npr70Modem 12 }
+
+npr70RxFecOk OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Received radio frames since the start with no failed block. A frame
+    has 4 blocks, the 4th is the XOR of the other three."
+    ::= { npr70RxFrames 1 }
+
+npr70RxFecFixed OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Received radio frames since the start with one failed block, rebuilt
+    from the other three."
+    ::= { npr70RxFrames 2 }
+
+npr70RxFecLost OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"Received radio frames since the start with two or more failed blocks,
+    dropped. Frames that the radio chip never detected are not counted."
+    ::= { npr70RxFrames 3 }
+
+npr70RxSegmentGap OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+	"IP packets dropped since the start because a segment before the one
+    received was missing. A lost last segment is not seen here."
+    ::= { npr70RxFrames 4 }
 
 END

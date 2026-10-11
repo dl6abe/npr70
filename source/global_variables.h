@@ -202,6 +202,16 @@ extern unsigned short int G_radio_addr_table_BER[radio_addr_table_size];
 extern short int G_downlink_TA; 
 //extern short int G_radio_addr_table_TA[radio_addr_table_size]; 
 extern int G_downlink_bandwidth_temp;
+
+// Receive statistics per radio frame, counted after the FEC check (one frame = 4 blocks, the 4th is the XOR of the others)
+extern unsigned int G_rx_fec_ok;     // every block passed its check
+extern unsigned int G_rx_fec_fixed;  // one block failed and was rebuilt from the other three
+extern unsigned int G_rx_fec_lost;   // two or more blocks failed, frame dropped
+extern unsigned int G_rx_seg_gap;    // a segment of an IP packet was missing, packet dropped
+// the same per client, counted on the master for the frames it receives from the clients
+extern unsigned int G_rx_fec_client_ok[radio_addr_table_size];
+extern unsigned int G_rx_fec_client_fixed[radio_addr_table_size];
+extern unsigned int G_rx_fec_client_lost[radio_addr_table_size];
 extern int G_uplink_bandwidth_temp;
 
 extern int super_debug;

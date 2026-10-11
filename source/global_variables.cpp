@@ -143,7 +143,14 @@ long int TDMA_table_TA[radio_addr_table_size];
 
 unsigned short int G_downlink_RSSI; 
 unsigned short int G_radio_addr_table_RSSI[radio_addr_table_size]; 
-unsigned short int G_downlink_BER; 
+unsigned short int G_downlink_BER;
+unsigned int G_rx_fec_ok = 0;
+unsigned int G_rx_fec_fixed = 0;
+unsigned int G_rx_fec_lost = 0;
+unsigned int G_rx_seg_gap = 0;
+unsigned int G_rx_fec_client_ok[radio_addr_table_size];
+unsigned int G_rx_fec_client_fixed[radio_addr_table_size];
+unsigned int G_rx_fec_client_lost[radio_addr_table_size]; 
 unsigned short int G_radio_addr_table_BER[radio_addr_table_size]; 
 short int G_downlink_TA; 
 int G_downlink_bandwidth_temp;
