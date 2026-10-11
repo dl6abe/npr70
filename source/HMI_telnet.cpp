@@ -238,6 +238,35 @@ int serial_term_loop (void) {
 	}
 }
 
+static void HMI_print_help(void);
+
+// One line per call, the console output buffer is small.
+static void HMI_print_help(void) {
+	HMI_printf("Commands:\r\n");
+	HMI_printf("  display config      show the configuration (show works as well)\r\n");
+	HMI_printf("  display static      show the static address allocation\r\n");
+	HMI_printf("  display DHCP_ARP    show the DHCP and ARP entries\r\n");
+	HMI_printf("  set <param> <value> change a parameter, then 'save'\r\n");
+	HMI_printf("  save                write the configuration to flash\r\n");
+	HMI_printf("  reset_to_default    erase the saved configuration\r\n");
+	HMI_printf("  radio on|off        switch the radio\r\n");
+	HMI_printf("  status              live link status, Ctrl+C to leave\r\n");
+	HMI_printf("  who                 live master and client list, Ctrl+C to leave\r\n");
+	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
+	HMI_printf("  version             firmware version and band\r\n");
+	HMI_printf("  reboot              restart the modem\r\n");
+	HMI_printf("  exit                close the telnet session (logout works as well)\r\n");
+	HMI_printf("Radio parameters:\r\n");
+	HMI_printf("  frequency freq_shift RF_power modulation radio_netw_ID radio_on_at_start\r\n");
+	HMI_printf("Identity and mode:\r\n");
+	HMI_printf("  callsign is_master master_FDD trans_method\r\n");
+	HMI_printf("Network parameters:\r\n");
+	HMI_printf("  modem_IP netmask IP_begin master_IP_size client_req_size client_static_IP\r\n");
+	HMI_printf("  DHCP_active def_route_active def_route_val DNS_active DNS_value master_down_IP\r\n");
+	HMI_printf("  telnet_active telnet_routed Eth_mode (0 to 7, 7 = auto)\r\n");
+	HMI_printf("ready> ");
+}
+
 void HMI_line_parse (char* RX_text, int RX_text_count) {
 	char* loc_command_str;// [100];
 	char* loc_param1_str;
@@ -263,7 +292,7 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 				HMI_printf("OK\r\nready> ");
 			}
 			else {
-				HMI_printf("unknown radio command\r\nready> ");
+				HMI_printf("ERROR: unknown parameter for 'radio', use 'radio on' or 'radio off'.\r\nready> ");
 			}
 		}
 		
@@ -280,7 +309,8 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			echo_ON = 0;
 			HMI_periodic_call();
 		}
-		if (strcmp(loc_command_str, "display") == 0) {
+		// display, show is the same command
+		if ((strcmp(loc_command_str, "display") == 0) || (strcmp(loc_command_str, "show") == 0)) {
 			command_understood = 1;
 			if (strcmp(loc_param1_str, "config") == 0) {//display config
 				HMI_display_config();
@@ -292,7 +322,7 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 				DHCP_ARP_print_entries();
 			}
 			else {
-				HMI_printf("unknown display command\r\nready> ");
+				HMI_printf("ERROR: unknown argument for display/show, type 'help' for the list.\r\nready> ");
 			}
 		}
 		if (strcmp(loc_command_str, "set") == 0) {
@@ -317,7 +347,7 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			RADIO_off_if_necessary(0);
 			temp = NFPR_config_save();
 			RADIO_restart_if_necessary(0, 0, 1);
-			HMI_printf("saved index:%i\r\nready> ", temp);
+			HMI_printf("Configuration saved. Index: %i.\r\nready> ", temp);
 		}
 		if (strcmp(loc_command_str, "reset_to_default") == 0) {
 			command_understood = 1;
@@ -331,12 +361,17 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			command_understood = 1;
 			HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\nready> ", FW_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
 		}
-		if (strcmp(loc_command_str, "exit") == 0) {
+		// exit, logout is the same command
+		if ((strcmp(loc_command_str, "exit") == 0) || (strcmp(loc_command_str, "logout") == 0)) {
 			command_understood = 1;
 			HMI_exit();
 		}
+		if ((strcmp(loc_command_str, "help") == 0) || (strcmp(loc_command_str, "?") == 0)) {
+			command_understood = 1;
+			HMI_print_help();
+		}
 		if (command_understood == 0) {
-			HMI_printf("unknown command\r\nready> ");
+			HMI_printf("Unknown command. Type 'help' for the list.\r\nready> ");
 		}
 	} else {//just a return with nothing
 		HMI_printf("ready> ");
@@ -701,7 +736,7 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 				RADIO_restart_if_necessary(0, 1, 1);
 				HMI_printf("OK\r\nready> ");
 			} else {
-				HMI_printf("wrong freq value\r\nready> ");
+				HMI_printf("ERROR: invalid value for frequency.\r\nready> ");
 			}
 		}
 		else if (strcmp(loc_param1, "freq_shift") == 0) {
@@ -718,7 +753,7 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 				//}
 				HMI_printf("OK\r\nready> ");
 			} else {
-				HMI_printf("wrong freq value\r\nready> ");
+				HMI_printf("ERROR: invalid value for freq_shift.\r\nready> ");
 			}
 		}
 		else if (strcmp(loc_param1, "RF_power") == 0) {
@@ -730,7 +765,7 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 				RADIO_restart_if_necessary(0, 0, 1);
 				HMI_printf("OK\r\nready> ");
 			} else {
-				HMI_printf("error : max RF_power value 127\r\nready> ");
+				HMI_printf("ERROR: maximum RF_power value is 127.\r\nready> ");
 			}
 		}
 		else if (strcmp(loc_param1, "Eth_mode") == 0) {
@@ -752,7 +787,7 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 				RADIO_restart_if_necessary(1, 1, 1);
 				HMI_printf("OK\r\nready> ");
 			} else {
-				HMI_printf("wrong modulation value\r\nready> ");
+				HMI_printf("ERROR: invalid value for modulation.\r\nready> ");
 			}
 		}
 		else if (strcmp(loc_param1, "radio_netw_ID") == 0) {
@@ -764,14 +799,14 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 				RADIO_restart_if_necessary(1, 1, 1);
 				HMI_printf("OK\r\nready> ");
 			} else {
-				HMI_printf("wrong value, 15 max\r\nready> ");
+				HMI_printf("ERROR: invalid network ID, maximum is 15.\r\nready> ");
 			}
 		}
 		else {
-			HMI_printf("unknown config param\r\nready> ");
+			HMI_printf("ERROR: unknown config parameter, type 'help' for the list.\r\nready> ");
 		}
 	} else {
-		HMI_printf("set command requires 2 param\r\nready> ");
+		HMI_printf("ERROR: 'set' needs a parameter and a value, for example: set RF_power 6\r\nready> ");
 	}
 }
 
