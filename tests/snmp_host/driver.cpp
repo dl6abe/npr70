@@ -17,6 +17,7 @@ unsigned short int G_downlink_BER = 0;
 char CONF_radio_addr_table_status[radio_addr_table_size] = {0, 1, 0, 1, 0, 0, 0};
 char CONF_radio_addr_table_callsign[radio_addr_table_size][16] = {{0}, {0, 0, 'D','L','6','A','B','E','-','7','1',0}, {0}, {0, 0, 'D','L','6','A','B','E','-','7','2',0}, {0}, {0}, {0}};
 unsigned char G_reset_reason = 0;
+char CONF_radio_my_callsign[16] = {0, 0, 'D','L','6','A','B','E','-','7','0',0};
 
 static uint8_t g_in[2048];
 static uint32_t g_in_len = 0;

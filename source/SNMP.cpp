@@ -90,6 +90,9 @@ static const dataEntryType snmpData[] =
         // SysUptime Entry
         {8, {0x2b, 6, 1, 2, 1, 1, 3, 0}, ASN_TIMETICKS, 0, {}, snmpGetUptime, NULL},
 
+        // SysName Entry: the callsign of this modem
+        {8, {0x2b, 6, 1, 2, 1, 1, 5, 0}, ASN_OCTETSTRING, 0, {}, snmpGetSysName, NULL},
+
         // 1.3.6.1.4.1.54539 (Wizkers)
         //               .100 (NPR-70)
         //               .1               // Temperature
@@ -152,6 +155,15 @@ const char* snmp_reset_reason_text(unsigned char code)
     if (code >= sizeof(reset_reason_names) / sizeof(reset_reason_names[0]))
         code = 0;
     return reset_reason_names[code];
+}
+
+void snmpGetSysName(void *ptr, uint8_t *len)
+{
+    char *out = (char *)ptr; // MAX_STRING bytes
+    // the first two bytes of the stored callsign are not part of the name
+    strncpy(out, CONF_radio_my_callsign + 2, MAX_STRING - 1);
+    out[MAX_STRING - 1] = 0;
+    *len = strlen(out);
 }
 
 void snmpGetResetReason(void *ptr, uint8_t *len)

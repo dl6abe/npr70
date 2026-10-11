@@ -14,4 +14,5 @@ extern unsigned short int G_downlink_BER;
 extern char CONF_radio_addr_table_status[radio_addr_table_size];
 extern char CONF_radio_addr_table_callsign[radio_addr_table_size][16];
 extern unsigned char G_reset_reason;
+extern char CONF_radio_my_callsign[16];
 #endif

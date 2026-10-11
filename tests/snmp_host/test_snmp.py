@@ -137,6 +137,8 @@ B = "1.3.6.1.4.1.54539.100"
 a = Agent("master", reason=4)
 r = a.ask("get", "1.3.6.1.2.1.1.1.0")
 check("get sysDescr", not isinstance(r, str) and value(r[2], r[3]) == "NPR-70", r)
+r = a.ask("get", "1.3.6.1.2.1.1.5.0")
+check("get sysName = own callsign", not isinstance(r, str) and value(r[2], r[3]) == "DL6ABE-70", r)
 r = a.ask("get", B + ".1.0")
 check("get temperature", not isinstance(r, str) and value(r[2], r[3]) == 32, r)
 r = a.ask("get", "1.3.6.1.2.1.1.1.0", community=b"wrong")
