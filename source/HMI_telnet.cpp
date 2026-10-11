@@ -813,6 +813,7 @@ void HMI_print_who(void) {
 	unsigned int loc_age;
 	unsigned int timer_snapshot;
 	unsigned long int last_IP;
+	float loc_RSSI, loc_TA;
 	unsigned char IP_c[6];
 	char temp_string[50] = {0x1B,0x5B,0x41,0x1B,0x5B,0x41,0x1B,0x5B,0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x1B, 0x5B, 0x41,0x00};
 
@@ -836,9 +837,19 @@ void HMI_print_who(void) {
 			HMI_printf ("IP start:%i.%i.%i.%i ", IP_c[0], IP_c[1], IP_c[2], IP_c[3]);
 			last_IP = CONF_radio_addr_table_IP_begin[i] + CONF_radio_addr_table_IP_size[i] - 1;
 			IP_int2char (last_IP, IP_c);
-			HMI_printf ("IP end:%i.%i.%i.%i\r\n", IP_c[0], IP_c[1], IP_c[2], IP_c[3]);
+			HMI_printf ("IP end:%i.%i.%i.%i ", IP_c[0], IP_c[1], IP_c[2], IP_c[3]);
+			// The master keeps the RSSI in the upper byte and the distance ten times finer than
+			// what it sends to the clients in the who message, a client stores both as received.
+			if (is_TDMA_master) {
+				loc_RSSI = (float)(G_radio_addr_table_RSSI[i] >> 8);
+				loc_TA = (float)(TDMA_table_TA[i] / 10);
+			} else {
+				loc_RSSI = (float)G_radio_addr_table_RSSI[i];
+				loc_TA = (float)TDMA_table_TA[i];
+			}
+			HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
 		} else {
-			HMI_printf ("                                                            \r\n");
+			HMI_printf ("                                                            \x1b[K\r\n");
 		}
 		
 	}
