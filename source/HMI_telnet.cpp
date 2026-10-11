@@ -883,7 +883,11 @@ void HMI_print_who(void) {
 				loc_RSSI = (float)G_radio_addr_table_RSSI[i];
 				loc_TA = (float)TDMA_table_TA[i];
 			}
-			HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
+			if (loc_RSSI > 0) {
+				HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
+			} else { // no measurement yet, a raw 0 would read as -136 dBm
+				HMI_printf ("TA:%.1fkm RSSI:n/a ERR:%.2f%%\x1b[K\r\n", 0.15*loc_TA, ((float)G_radio_addr_table_BER[i])/500);
+			}
 		} else {
 			HMI_printf ("                                                            \x1b[K\r\n");
 		}
