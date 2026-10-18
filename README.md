@@ -61,7 +61,7 @@ SNMP v1, community `public`, read only. `NPR-70.mib` describes the vendor OIDs (
 
 ## Status
 
-The build `261017I` (Mbed OS 5.15.9, tag `release-261017I-mbed-5.15.9`) is the stable build of this fork and the rollback point. Use it at your own risk. The firmware transmits on amateur radio frequencies and needs a valid licence.
+The build `261017I` (Mbed OS 5.15.9, tag `release-261017I-mbed-5.15.9`) is the stable build of this fork and the rollback point. The build `261017M` with Mbed OS CE 7.1.0 (tag `release-261017M-mbed-ce-7.1.0`, see the pre-release and the section "Mbed OS CE build (preview)") is a preview. Use both at your own risk. The firmware transmits on amateur radio frequencies and needs a valid licence.
 
 ## License
 
