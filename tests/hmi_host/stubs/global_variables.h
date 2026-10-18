@@ -24,6 +24,7 @@ extern unsigned char CONF_radio_network_ID;
 extern unsigned short int CONF_frequency_HD;
 extern short int CONF_freq_shift;
 extern unsigned char CONF_master_FDD;
+extern unsigned char CONF_transmission_method;
 extern unsigned char CONF_Eth_mode;
 extern unsigned long int CONF_master_down_IP;
 extern unsigned long int CONF_radio_IP_start;

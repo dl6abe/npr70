@@ -8,6 +8,7 @@ set(NPR_MBED_CE_PATH "$ENV{NPR_CE_WORK}/mbed-os-7.1.0" CACHE PATH "Mbed OS CE ch
 option(NPR_HAL_TICK_WRAP "Wrap HAL_GetTick like the 5.15.9 build (hal_tick_wrap.cpp, mode 1)" ON)
 option(NPR_UART_IRQ_PRIORITY "Put the console UART interrupt above all other interrupts" OFF)
 option(NPR_DBG_NO_ECHO "Measurement only: console echo off" OFF)
+option(NPR_DIAG "Console commands stack and latency, sections in debug (source/diag.cpp)" ON)
 option(NPR_SCANF_FLOAT "Link float support into sscanf (set frequency, set freq_shift)" ON)
 
 set(NPR_CONSOLE_BAUD 115200 CACHE STRING "Baud rate of the console UART (USB virtual COM port)")
@@ -19,11 +20,6 @@ include(${MBED_PATH}/tools/cmake/mbed_toolchain_setup.cmake)
 project(npr70_ce LANGUAGES C CXX ASM)
 include(${MBED_PATH}/tools/cmake/mbed_project_setup.cmake)
 
-# custom target NPR_L432KC (custom_targets.json5) needs a CMake target before mbed-os is added
-add_library(mbed-npr-l432kc INTERFACE)
-target_link_libraries(mbed-npr-l432kc INTERFACE mbed-nucleo-l432kc)
-add_subdirectory(${MBED_PATH} ./mbed-os)
-
 set(NPR_SRC_DIR "" CACHE PATH "Firmware source directory (default: ../npr70/source or ../source)")
 if(NOT NPR_SRC_DIR)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../npr70/source/main.cpp)
@@ -34,6 +30,21 @@ if(NOT NPR_SRC_DIR)
         message(FATAL_ERROR "firmware sources not found: set -DNPR_SRC_DIR=<path to source/>")
     endif()
 endif()
+get_filename_component(NPR_SRC_DIR "${NPR_SRC_DIR}" REALPATH)
+
+# The compiler embeds absolute source paths (__FILE__ in asserts and error messages). Map them to fixed names so
+# that the binary does not depend on where the sources, Mbed OS CE and the build directory are.
+add_compile_options(
+    -ffile-prefix-map=${NPR_MBED_CE_PATH}=/mbed-os
+    -ffile-prefix-map=${NPR_SRC_DIR}=/npr70/source
+    -ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=/npr70/ce
+    -ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=/build)
+
+# custom target NPR_L432KC (custom_targets.json5) needs a CMake target before mbed-os is added
+add_library(mbed-npr-l432kc INTERFACE)
+target_link_libraries(mbed-npr-l432kc INTERFACE mbed-nucleo-l432kc)
+add_subdirectory(${MBED_PATH} ./mbed-os)
+
 file(GLOB NPR_SOURCES ${NPR_SRC_DIR}/*.cpp)
 list(FILTER NPR_SOURCES EXCLUDE REGEX "Virt_Chan\\.cpp$")      # not built in the Makefile either
 if(NOT NPR_HAL_TICK_WRAP)
@@ -58,6 +69,9 @@ if(NPR_UART_IRQ_PRIORITY)
 endif()
 if(NPR_DBG_NO_ECHO)
     target_compile_definitions(npr70_ce PRIVATE NPR_DBG_NO_ECHO=1)
+endif()
+if(NOT NPR_DIAG)
+    target_compile_definitions(npr70_ce PRIVATE NPR_DIAG=0)
 endif()
 if(NPR_SCANF_FLOAT)
     target_link_options(npr70_ce PRIVATE -Wl,-u,_scanf_float)

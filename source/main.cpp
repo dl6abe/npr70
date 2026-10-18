@@ -28,6 +28,7 @@
 #include "TDMA.h"
 #include "signaling.h"
 #include "config_flash.h"
+#include "diag.h"
 
 #include "ext_SRAM2.h"
 
@@ -86,6 +87,7 @@ static unsigned char decode_reset_reason(uint32_t csr) {
 
 int main()
 {
+	DIAG_init();
 	// read the reset flags first and clear them so the next start sees only its own reason
 	G_reset_reason = decode_reset_reason(RCC->CSR);
 	RCC->CSR |= RCC_CSR_RMVF;

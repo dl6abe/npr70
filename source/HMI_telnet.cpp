@@ -19,6 +19,7 @@
 #include "mbed.h"
 #include "global_variables.h"
 #include "SNMP.h"
+#include "diag.h"
 #include "Eth_IPv4.h"
 #include "signaling.h"
 #include "config_flash.h"
@@ -272,6 +273,7 @@ int serial_term_loop (void) {
 
 static void HMI_print_help(void);
 static void HMI_debug_command(void);
+static void HMI_save_command(void);
 
 // One line per call, the console output buffer is small.
 static void HMI_print_help(void) {
@@ -289,6 +291,8 @@ static void HMI_print_help(void) {
 	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
 	HMI_printf("  version             firmware version and band\r\n");
 	HMI_printf("  uptime              time since the start of the modem\r\n");
+	HMI_printf("  stack               stack and heap use (highest values)\r\n");
+	HMI_printf("  latency [start|stop|clear]  jitter of the 1 ms Ticker callback\r\n");
 	HMI_printf("  phy                 Ethernet PHY status (debug), 'phy reset', 'phy mode <0-5|7>'\r\n");
 	HMI_printf("  debug               everything for a fault report in one output (no live display)\r\n");
 	HMI_printf("  reboot              restart the modem\r\n");
@@ -347,7 +351,6 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 	char* loc_param1_str;
 	char* loc_param2_str;
 	int command_understood = 0;
-	int temp;
 
 	loc_command_str = strtok (RX_text, " ");
 	loc_param1_str = strtok (NULL, " ");
@@ -428,11 +431,7 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 		}
 		if (strcmp(loc_command_str, "save") == 0) {
 			command_understood = 1;
-
-			RADIO_off_if_necessary(0);
-			temp = NFPR_config_save();
-			RADIO_restart_if_necessary(0, 0, 1);
-			HMI_printf("Configuration saved. Index: %i.\r\nready> ", temp);
+			HMI_save_command();
 		}
 		if (strcmp(loc_command_str, "reset_to_default") == 0) {
 			command_understood = 1;
@@ -455,6 +454,14 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			command_understood = 1;
 			uint32_t up = snmp_uptime_seconds(); // the clock SNMP sysUpTime uses
 			HMI_printf("uptime: %lu days %02lu:%02lu:%02lu\r\nready> ", (unsigned long)(up / 86400), (unsigned long)((up / 3600) % 24), (unsigned long)((up / 60) % 60), (unsigned long)(up % 60));
+		}
+		if (strcmp(loc_command_str, "stack") == 0) {
+			command_understood = 1;
+			DIAG_stack_print();
+		}
+		if (strcmp(loc_command_str, "latency") == 0) {
+			command_understood = 1;
+			DIAG_latency_command(loc_param1_str);
 		}
 		if (strcmp(loc_command_str, "phy") == 0) {
 			command_understood = 1;
@@ -684,6 +691,7 @@ static void HMI_debug_command(void) {
 	HMI_phy_lines();
 	HMI_printf("== config ==\r\n");
 	HMI_config_lines();
+	DIAG_debug_lines();
 	HMI_printf("== end of debug ==\r\nready> ");
 }
 
@@ -694,6 +702,122 @@ void HMI_display_static(void) {
 // Handlers of the 'set <parameter> <value>' command, one per parameter. Each one checks its value,
 // applies it and prints the answer including the next prompt.
 
+// ---- IP address checks: pure functions, tested on the host in tests/ip_host ----
+
+// Strict dotted decimal: four numbers of 1 to 3 digits, each 0 to 255, three dots, nothing else (no hex, no octal).
+static int HMI_parse_IP(const char* s, unsigned long int* ip) {
+	unsigned long int result = 0;
+	for (int field = 0; field < 4; field++) {
+		int digits = 0;
+		unsigned int n = 0;
+		while ( (s[digits] >= '0') && (s[digits] <= '9') && (digits < 4) ) {
+			n = (n * 10) + (s[digits] - '0');
+			digits++;
+		}
+		if ( (digits < 1) || (digits > 3) || (n > 255) ) {
+			return 0;
+		}
+		s += digits;
+		result = (result * 256) + n;
+		if (field < 3) {
+			if (*s != '.') {
+				return 0;
+			}
+			s++;
+		}
+	}
+	if (*s != 0) {
+		return 0;
+	}
+	*ip = result;
+	return 1;
+}
+
+// Netmask: ones followed by zeros, prefix length 8 to 30.
+static int HMI_netmask_valid(unsigned long int mask) {
+	unsigned long int host = (~mask) & 0xFFFFFFFFUL;      // the host bits
+	if ((host & (host + 1)) != 0) {
+		return 0;                                         // not of the form 0...01...1
+	}
+	return (host >= 3) && (host <= 0x00FFFFFFUL);
+}
+
+// Address of a host: first number 1 to 223 and not 127.
+static int HMI_host_IP_valid(unsigned long int ip) {
+	unsigned int first = (ip >> 24) & 0xFF;
+	return (first >= 1) && (first <= 223) && (first != 127);
+}
+
+#define HMI_NET_MODEM_IP   0x01 // modem_IP is the network or the broadcast address
+#define HMI_NET_POOL       0x02 // IP range is not inside the subnet, or has its first or last address
+#define HMI_NET_POOL_MODEM 0x04 // modem_IP is inside the IP range
+#define HMI_NET_ROUTE      0x08 // default route is not inside the subnet
+
+typedef struct {
+	unsigned long int modem_IP, mask, pool_start, pool_size, def_route;
+	unsigned char check_pool, check_route;
+} HMI_net_T;
+
+// Which of the conditions above are violated.
+static unsigned int HMI_net_problems(const HMI_net_T* n) {
+	unsigned int problems = 0;
+	unsigned long int net = n->modem_IP & n->mask;
+	unsigned long int broadcast = (net | ~n->mask) & 0xFFFFFFFFUL;
+	if ( (n->modem_IP == net) || (n->modem_IP == broadcast) ) {
+		problems |= HMI_NET_MODEM_IP;
+	}
+	if (n->check_pool) {
+		unsigned long int first = n->pool_start;
+		if ( !( ((first & n->mask) == net) && (first > net) && (first < broadcast) && (n->pool_size >= 1) && (n->pool_size <= broadcast - first) ) ) {
+			problems |= HMI_NET_POOL;
+		} else if ( (n->modem_IP >= first) && (n->modem_IP - first < n->pool_size) ) {
+			problems |= HMI_NET_POOL_MODEM;
+		}
+	}
+	if ( (n->check_route) && ( ((n->def_route & n->mask) != net) || (n->def_route == net) || (n->def_route == broadcast) ) ) {
+		problems |= HMI_NET_ROUTE;
+	}
+	return problems;
+}
+
+// ---- end of the IP address checks ----
+
+// The network settings as the modem has them now.
+static void HMI_net_from_config(HMI_net_T* n) {
+	n->modem_IP = LAN_conf_saved.LAN_modem_IP;
+	n->mask = LAN_conf_saved.LAN_subnet_mask;
+	n->pool_start = CONF_radio_IP_start;
+	n->pool_size = CONF_radio_IP_size;
+	n->def_route = LAN_conf_saved.LAN_def_route;
+	n->check_pool = ( (is_TDMA_master) && (CONF_master_FDD < 2) && (CONF_transmission_method == 0) ); // clients get the range from the master
+	n->check_route = LAN_conf_saved.LAN_def_route_activ;
+}
+
+static const char* HMI_net_problem_text(unsigned int problem) {
+	switch (problem) {
+	case HMI_NET_MODEM_IP:   return "modem_IP is the network or broadcast address of the subnet";
+	case HMI_NET_POOL:       return "the IP range (IP_begin, master_IP_size) is not inside the subnet or has its first or last address";
+	case HMI_NET_POOL_MODEM: return "modem_IP is inside the IP range";
+	case HMI_NET_ROUTE:      return "def_route_val is not inside the subnet";
+	}
+	return "";
+}
+
+// One line per violated condition. prefix is "warning: " for 'set' and "  - " for 'save'.
+static void HMI_net_print_problems(unsigned int problems, const char* prefix) {
+	for (unsigned int bit = 1; bit <= HMI_NET_ROUTE; bit <<= 1) {
+		if (problems & bit) {
+			HMI_printf("%s%s\r\n", prefix, HMI_net_problem_text(bit));
+		}
+	}
+}
+
+// Setting one value is often one step of several (new subnet: modem_IP, netmask, IP_begin). So 'set' only warns,
+// 'save' refuses.
+static void HMI_net_warn(const HMI_net_T* n) {
+	HMI_net_print_problems(HMI_net_problems(n), "warning: ");
+}
+
 static const char* HMI_DHCP_master_warning(void) {
 	if ( (is_TDMA_master) && (LAN_conf_saved.DHCP_server_active == 1) ) {
 		return " (warning, DHCP inhibited in master mode)";
@@ -701,14 +825,39 @@ static const char* HMI_DHCP_master_warning(void) {
 	return "";
 }
 
-// Common part of the IP address parameters that need a radio restart.
-static void HMI_set_IP_value(char* value, unsigned long int* target) {
-	unsigned long int temp_uint = HMI_str2IP(value);
-	if (temp_uint != 0) {
-		RADIO_off_if_necessary(1);
-		*target = temp_uint;
-		RADIO_restart_if_necessary(1, 0, 1);
+// Common part of the IP address parameters that need a radio restart. what tells which value is set:
+// 'm' netmask, 'h' address of a host without a link to the other values, 'M' modem_IP, 'B' IP_begin, 'R' def_route_val.
+static void HMI_set_IP_value(char* value, unsigned long int* target, char what) {
+	unsigned long int ip;
+	if (!HMI_parse_IP(value, &ip)) {
+		HMI_printf("bad IP format\r\nready> ");
+		return;
 	}
+	if (ip == 0) {
+		HMI_printf("0.0.0.0 is not allowed\r\nready> ");
+		return;
+	}
+	if ( (what == 'm') && (!HMI_netmask_valid(ip)) ) {
+		HMI_printf("bad netmask: ones followed by zeros, prefix 8 to 30, for example 255.255.255.0\r\nready> ");
+		return;
+	}
+	if ( (what != 'm') && (!HMI_host_IP_valid(ip)) ) {
+		HMI_printf("not a host address: the first number must be 1 to 223 and not 127\r\nready> ");
+		return;
+	}
+	HMI_net_T net;
+	HMI_net_from_config(&net);
+	if (what == 'm') { net.mask = ip; }
+	if (what == 'M') { net.modem_IP = ip; }
+	if (what == 'B') { net.pool_start = ip; }
+	if (what == 'R') { net.def_route = ip; }
+	if (what != 'h') {
+		HMI_net_warn(&net);
+	}
+	HMI_printf("OK\r\nready> ");
+	RADIO_off_if_necessary(1);
+	*target = ip;
+	RADIO_restart_if_necessary(1, 0, 1);
 }
 
 // Common part of the size parameters that need a radio restart.
@@ -716,6 +865,12 @@ static void HMI_set_size_value(char* value, unsigned long int* target) {
 	unsigned long int temp_uint;
 	int temp = sscanf (value, "%ld", &temp_uint);
 	if ( (temp==1) && (temp_uint!=0) ) {
+		if (target == &CONF_radio_IP_size) {
+			HMI_net_T net;
+			HMI_net_from_config(&net);
+			net.pool_size = temp_uint;
+			HMI_net_warn(&net);
+		}
 		RADIO_off_if_necessary(1);
 		*target = temp_uint;
 		RADIO_restart_if_necessary(1, 0, 1);
@@ -823,12 +978,12 @@ static void HMI_set_DHCP_active(char* value) {
 	}
 }
 
-static void HMI_set_modem_IP(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_modem_IP); }
-static void HMI_set_netmask(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_subnet_mask); }
-static void HMI_set_def_route_val(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_def_route); }
-static void HMI_set_DNS_value(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_DNS_value); }
-static void HMI_set_IP_begin(char* value) { HMI_set_IP_value(value, &CONF_radio_IP_start); }
-static void HMI_set_master_down_IP(char* value) { HMI_set_IP_value(value, &CONF_master_down_IP); }
+static void HMI_set_modem_IP(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_modem_IP, 'M'); }
+static void HMI_set_netmask(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_subnet_mask, 'm'); }
+static void HMI_set_def_route_val(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_def_route, 'R'); }
+static void HMI_set_DNS_value(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_DNS_value, 'h'); }
+static void HMI_set_IP_begin(char* value) { HMI_set_IP_value(value, &CONF_radio_IP_start, 'B'); }
+static void HMI_set_master_down_IP(char* value) { HMI_set_IP_value(value, &CONF_master_down_IP, 'h'); }
 static void HMI_set_master_IP_size(char* value) { HMI_set_size_value(value, &CONF_radio_IP_size); }
 static void HMI_set_client_req_size(char* value) { HMI_set_size_value(value, &CONF_radio_IP_size_requested); }
 
@@ -956,25 +1111,6 @@ void HMI_set_command(char* loc_param1, char* loc_param2) {
 	}
 }
 
-unsigned long int HMI_str2IP(char* raw_string) {
-	unsigned int IP_char_t[6];
-	unsigned char IP_char[6]; 
-	unsigned long int answer;
-	int i;
-	answer = sscanf(raw_string, "%i.%i.%i.%i", IP_char_t, IP_char_t+1, IP_char_t+2, IP_char_t+3);
-	for (i=0;i<4; i++) {
-		IP_char[i] = IP_char_t[i];
-	}
-	if (answer == 4) {
-		answer = IP_char2int(IP_char);
-		HMI_printf("OK\r\nready> ");
-	} else {
-		HMI_printf("bad IP format\r\nready> ");
-		answer = 0;
-	}
-	return answer;
-}
-
 unsigned char HMI_yes_no_2int(char* raw_string) {
 	unsigned char answer;
 	if (strcmp (raw_string, "yes") == 0) {
@@ -988,6 +1124,23 @@ unsigned char HMI_yes_no_2int(char* raw_string) {
 		answer = -1;
 	}
 	return answer;
+}
+
+// 'save': refuses when the network settings do not fit, see HMI_net_problems.
+static void HMI_save_command(void) {
+	HMI_net_T net_to_save;
+	HMI_net_from_config(&net_to_save);
+	unsigned int net_problems = HMI_net_problems(&net_to_save);
+	if (net_problems != 0) {
+		HMI_printf("ERROR: cannot save, the network settings do not fit:\r\n");
+		HMI_net_print_problems(net_problems, "  - ");
+		HMI_printf("Correct them with 'set' (see 'display config'), then 'save'.\r\nready> ");
+		return;
+	}
+	RADIO_off_if_necessary(0);
+	unsigned int index = NFPR_config_save();
+	RADIO_restart_if_necessary(0, 0, 1);
+	HMI_printf("Configuration saved. Index: %i.\r\nready> ", index);
 }
 
 void HMI_print_who(void) {

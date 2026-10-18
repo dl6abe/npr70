@@ -6,7 +6,7 @@
 
 LAN_conf_T LAN_conf_saved;
 bool is_TDMA_master;
-unsigned char is_telnet_active, is_telnet_routed, CONF_radio_modulation, CONF_radio_network_ID, CONF_master_FDD, CONF_Eth_mode, CONF_radio_PA_PWR, CONF_radio_default_state_ON_OFF;
+unsigned char is_telnet_active, is_telnet_routed, CONF_radio_modulation, CONF_radio_network_ID, CONF_master_FDD, CONF_transmission_method, CONF_Eth_mode, CONF_radio_PA_PWR, CONF_radio_default_state_ON_OFF;
 unsigned short int CONF_frequency_HD;
 short int CONF_freq_shift;
 unsigned long int CONF_master_down_IP, CONF_radio_IP_start, CONF_radio_IP_size, CONF_radio_IP_size_requested;
@@ -33,6 +33,20 @@ static void dump(void) {
 		0UL, 0UL, is_telnet_opened, CONF_radio_my_callsign + 2, CONF_radio_my_callsign[0] + CONF_radio_my_callsign[1]);
 }
 
+// The IP rules are stricter than the frozen original (tests/ip_host checks them). The original accepts these
+// pairs and sets a wrong or meaningless value, so a differential test makes no sense for them.
+static int differs_by_design(const char* name, const char* value) {
+	const char* ip_names[] = {"modem_IP", "netmask", "def_route_val", "DNS_value", "IP_begin", "master_down_IP"};
+	int is_ip = 0;
+	for (unsigned int i = 0; i < sizeof(ip_names)/sizeof(ip_names[0]); i++) {
+		if (strcmp(name, ip_names[i]) == 0) is_ip = 1;
+	}
+	if (!is_ip) return 0;
+	if (strcmp(value, "0.0.0.0") == 0 || strcmp(value, "300.1.1.1") == 0 || strcmp(value, "bad") == 0) return 1;
+	if (strcmp(name, "netmask") == 0) return strcmp(value, "255.255.255.240") != 0;     // only a contiguous mask is valid
+	return strcmp(value, "255.255.255.240") == 0;                                        // 255.x.x.x is no host address
+}
+
 int main() {
 	const char* names[] = {"callsign", "is_master", "telnet_active", "telnet_routed", "DNS_active", "def_route_active", "master_FDD",
 		"radio_on_at_start", "DHCP_active", "modem_IP", "netmask", "def_route_val", "DNS_value", "IP_begin", "master_down_IP",
@@ -40,7 +54,7 @@ int main() {
 		"unknown", "trans_method", "Callsign", ""};
 	const char* values[] = {"yes", "no", "maybe", "no", "yes", "up", "down", "1.2.3.4", "192.168.10.2", "bad", "0.0.0.0", "300.1.1.1",
 		"5", "0", "7", "6", "127", "128", "-3", "12", "16", "21", "24", "10", "x", "440.5", "439.7", "445", "419", "-4.8", "4.8", "11",
-		"DL6ABE-70", "ABCDEFGHIJKLM", "ABCDEFGHIJKLMN", "-1", "300"};
+		"DL6ABE-70", "ABCDEFGHIJKLM", "ABCDEFGHIJKLMN", "-1", "300", "255.255.255.240"};
 	unsigned int n_names = sizeof(names)/sizeof(names[0]), n_values = sizeof(values)/sizeof(values[0]);
 	for (unsigned int i = 0; i < n_names; i++) {
 		for (unsigned int j = 0; j < n_values; j++) {
@@ -52,6 +66,7 @@ int main() {
 					char p1[64], p2[64];
 					strcpy(p1, names[i]);
 					strcpy(p2, values[j]);
+					if (differs_by_design(p1, p2)) continue;
 					printf("SET %s %s m%d d%d\n", p1, p2, master, dhcp);
 					HMI_set_command(p1, p2);
 					dump();

@@ -1,5 +1,6 @@
 {
     "overrides": {
+        "platform.thread-stats-enabled": true,
         "platform.stdio-baud-rate": @NPR_CONSOLE_BAUD@,
         "platform.stdio-buffered-serial": true,
         "platform.stdio-convert-newlines": false,

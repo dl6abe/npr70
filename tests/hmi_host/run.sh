@@ -21,6 +21,12 @@ c++ $flags -o "$work/ref" "$work/driver.cpp" "$work/HMI_set_ref.cpp" 2>"$work/bu
 c++ $flags -o "$work/new" "$work/driver.cpp" "$work/HMI_set_new.cpp" 2>"$work/build_new.log" || { cat "$work/build_new.log"; exit 1; }
 "$work/ref" > "$work/ref.out"
 "$work/new" > "$work/new.out"
+# The new code may add warning lines (network settings that do not fit); the reference does not know them.
+python3 - "$work/new.out" <<'PY'
+import re, sys
+t = open(sys.argv[1], newline="").read()
+open(sys.argv[1], "w", newline="").write(re.sub(r"OUT\[warning: [^\]]*\]\n", "", t))
+PY
 lines=$(wc -l < "$work/ref.out")
 if cmp -s "$work/ref.out" "$work/new.out"; then
 	echo "HMI set host test OK: $lines identical output lines"

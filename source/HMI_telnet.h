@@ -51,8 +51,6 @@ void HMI_display_static(void);
 
 void HMI_set_command(char* loc_param1, char* loc_param2);
 
-unsigned long int HMI_str2IP(char* raw_string);
-
 unsigned char HMI_yes_no_2int(char* raw_string);
 
 void HMI_print_who(void);

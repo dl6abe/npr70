@@ -12,6 +12,8 @@
 #   4  connect ACK is 61 bytes, buffer was 60    (signaling.cpp)
 #  11  PHY self-heal and re-configure watchdog   (W5500.cpp, fake PHY register and clock)
 #  12  NACK to a connected client: ID back to 0x7E (signaling.cpp, NETWORK_DEBUG_LOG.md 2.77)
+#  13  multiframe mask field 0 to 15 from the master (TDMA.cpp, LUT_multif_mask)
+#  14  callsign copied with strncpy(..., 15) is terminated at byte 15 (config_flash.cpp)
 # All cases must pass. A bug that is open again can be marked as expected failure (XFAIL) with
 # EXPECT<n>=fail, for example EXPECT2=fail. A different result than expected makes the script exit with 1.
 set -u
@@ -51,6 +53,13 @@ open(work + "/ack_part.inc", "w").write(cut("signaling.cpp", "void signaling_con
 open(work + "/nack_part.inc", "w").write(cut("signaling.cpp", "void signaling_connect_NACK_process", "static unsigned char loc_data"))
 open(work + "/signaling_part.inc", "w").write(cut("signaling.cpp", "unsigned long int signaling_lookfor_IP_range", "void signaling_connect_ACK_process"))
 open(work + "/phy_part.inc", "w").write(cut("W5500.cpp", "static int W5500_configured", "void W5500_initial_configure"))
+open(work + "/tdma_part.inc", "w").write(tail("TDMA.cpp", "void TDMA_slave_alloc_exploitation"))
+cfg = open(src + "/config_flash.cpp", newline='').read().replace('\r\n', '\n')
+for name, pat in (("cfg_read", r"[ \t]*strncpy\(CONF_radio_my_callsign, data_r->callsign, 15\);\n(?:[ \t]*CONF_radio_my_callsign\[15\] = 0;\n)?"),
+                  ("cfg_write", r"[ \t]*strncpy\(data_r->callsign, CONF_radio_my_callsign, 15\);\n(?:[ \t]*data_r->callsign\[15\] = 0;\n)?")):
+    m = re.search(pat, cfg)
+    if not m: sys.exit("run.sh: the callsign copy in config_flash.cpp changed, update case 14 (" + name + ")")
+    open(work + "/" + name + ".inc", "w").write(m.group(0))
 PY
 cat > "$work/DHCP_decl.h" <<'H'
 #include "global_variables.h"
@@ -102,4 +111,6 @@ run_case "10a padding of short packets" pad "${EXPECT10:-pass}"
 run_case "4 connect ACK size" connect "${EXPECT4:-pass}"
 run_case "11 PHY self-heal" phy "${EXPECT11:-pass}"
 run_case "12 NACK resets the client ID" nack "${EXPECT12:-pass}"
+run_case "13 multiframe mask field 0 to 15" tdma "${EXPECT13:-pass}"
+run_case "14 callsign terminated at byte 15" cfg "${EXPECT14:-pass}"
 [ $fail -eq 0 ] && echo "mem host tests as expected" || { echo "mem host tests: UNEXPECTED RESULT"; exit 1; }

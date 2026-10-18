@@ -224,7 +224,6 @@ void apply_config_from_raw_string(npr_config* data_r) {
 }
 
 void write_config_to_raw_string (npr_config* data_r) {
-	int i;
 	data_r->is_master = is_TDMA_master;
 	strncpy(data_r->callsign, CONF_radio_my_callsign, 15);
 	data_r->callsign[15] = 0;

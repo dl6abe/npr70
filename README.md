@@ -41,7 +41,7 @@ Differences to the 5.15.9 build:
 
 Known limits:
 - The ST-Link virtual COM port stops forwarding after a host write of 16 bytes or more. Replug the USB cable. Use telnet for input.
-- Binaries built in different directories differ in the embedded source paths (`__FILE__`), not in the code.
+- The binary does not depend on the build directory: source paths are mapped to fixed names (`-ffile-prefix-map`), so two builds of the same sources are equal, apart from the version string.
 
 ## Flash
 
@@ -53,6 +53,7 @@ Host tests (no hardware), each with `run.sh`:
 
 - `tests/snmp_host/` SNMP agent (needs net-snmp tools)
 - `tests/dhcp_host/` and `tests/hmi_host/` DHCP server and `set` command, against the frozen original code
+- `tests/ip_host/` checks of IP addresses and the netmask in `set` and `save`
 - `tests/mem_host/` memory errors (ASan/UBSan)
 
 ## SNMP
@@ -61,7 +62,7 @@ SNMP v1, community `public`, read only. `NPR-70.mib` describes the vendor OIDs (
 
 ## Status
 
-The build `261017I` (Mbed OS 5.15.9, tag `release-261017I-mbed-5.15.9`) is the stable build of this fork and the rollback point. The build `261017M` with Mbed OS CE 7.1.0 (tag `release-261017M-mbed-ce-7.1.0`, see the pre-release and the section "Mbed OS CE build (preview)") is a preview. Use both at your own risk. The firmware transmits on amateur radio frequencies and needs a valid licence.
+The build `261017I` (Mbed OS 5.15.9, tag `release-261017I-mbed-5.15.9`) is the stable build of this fork and the rollback point. The build `261018L` with Mbed OS CE 7.1.0 (tag `release-261018L-mbed-ce-7.1.0`, see the pre-release and the section "Mbed OS CE build (preview)") is a preview. Use both at your own risk. The firmware transmits on amateur radio frequencies and needs a valid licence.
 
 ## License
 
