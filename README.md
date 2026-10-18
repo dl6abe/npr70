@@ -20,6 +20,29 @@ Result: `BUILD/NPR_14.bin` and `BUILD/NPR_14.elf`. `mbed-os/` is Mbed OS 5.15.9,
 
 Check the pin map of `PeripheralPins.c` before updating Mbed OS.
 
+## Mbed OS CE build (preview)
+
+The directory `ce/` builds the same firmware sources (`source/`, unchanged) against Mbed OS CE 7.1.0 (https://github.com/mbed-ce/mbed-os) with CMake. Everything specific to Mbed OS CE is in `ce/`: `CMakeLists.txt`, the target `NPR_L432KC` (`custom_targets.json5`), the replacement for `Serial` (`compat/npr_ce_compat.h`) and `build.sh`.
+
+Status: preview. The 5.15.9 build above is still the stable one.
+
+Requirements (tested with these versions): CMake 4.4, Ninja 1.13, `arm-none-eabi-gcc` 15.3, Python 3.15, Git. The checkout of Mbed OS CE needs about 1 GB with its submodules and is not part of this repository.
+
+    git clone --depth 1 --branch mbed-os-7.1.0 --recurse-submodules --shallow-submodules \
+        https://github.com/mbed-ce/mbed-os $NPR_CE_WORK/mbed-os-7.1.0
+    NPR_CE_WORK=<work dir> ce/build.sh
+
+Result: `$NPR_CE_WORK/build-npr70/npr70_ce.bin` (about 128 kB, 49 % of the flash, 95 % of the first RAM bank). Options of `build.sh` (environment variables): `NPR_CONSOLE_BAUD` (115200), `NPR_HAL_TICK_WRAP` (ON), `NPR_SCANF_FLOAT` (ON), `BUILD_DIR`.
+
+Differences to the 5.15.9 build:
+- The console UART runs at 115200 baud, fixed at build time.
+- `source/hal_tick_wrap.cpp` is built as well (same reason as with 5.15.9).
+- The settings in flash keep their layout. A flash with the CE build keeps them.
+
+Known limits:
+- The ST-Link virtual COM port stops forwarding after a host write of 16 bytes or more. Replug the USB cable. Use telnet for input.
+- Binaries built in different directories differ in the embedded source paths (`__FILE__`), not in the code.
+
 ## Flash
 
 Use OpenOCD. `st-flash` cannot run its flash loader after a firmware built with Mbed OS 5.11 or later. Flash the first build of a new Mbed OS version without antenna and watch the TX LED.

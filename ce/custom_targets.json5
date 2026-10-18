@@ -1,0 +1,20 @@
+{
+    // NUCLEO_L432KC with one contiguous RAM block. CE splits the 64 KiB into IRAM1 (48 KiB, 0x20000000) and
+    // IRAM2 (16 KiB, 0x10000000) and only fits .data/.bss into IRAM1 (stm32l4_dual_flash_bank.ld). The firmware
+    // needs about 58 KiB, so IRAM1 takes 60 KiB (0x20000000 to 0x2000EFFF, SRAM1 plus the first 12 KiB of the SRAM2
+    // alias at 0x2000C000) and IRAM2 the last 4 KiB of SRAM2 at 0x10003000 (alias 0x2000F000). SRAM2 ends at
+    // 0x10003FFF (RM0394, memory map). Check this after every CE update (NETWORK_DEBUG_LOG.md 2.98).
+    "NPR_L432KC": {
+        "inherits": ["NUCLEO_L432KC"],
+        "memory_banks": {
+            "IRAM1": {
+                "access": {"read": true, "write": true, "execute": false, "peripheral": false, "secure": false, "non_secure": false, "non_secure_callable": false},
+                "default": true, "startup": false, "start": 536870912, "size": 61440
+            },
+            "IRAM2": {
+                "access": {"read": true, "write": true, "execute": false, "peripheral": false, "secure": false, "non_secure": false, "non_secure_callable": false},
+                "default": false, "startup": false, "start": 268447744, "size": 4096
+            }
+        }
+    }
+}

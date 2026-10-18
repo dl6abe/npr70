@@ -1,0 +1,8 @@
+{
+    "overrides": {
+        "platform.stdio-baud-rate": @NPR_CONSOLE_BAUD@,
+        "platform.stdio-buffered-serial": true,
+        "platform.stdio-convert-newlines": false,
+        "platform.stdio-convert-tty-newlines": false
+    }
+}
