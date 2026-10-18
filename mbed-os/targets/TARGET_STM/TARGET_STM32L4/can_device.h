@@ -17,15 +17,15 @@
 #define MBED_CAN_DEVICE_H
 
 #include "cmsis.h"
-#include "stm32l4xx_hal.h"
+#include "stm32l4xx.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifdef DEVICE_CAN
+#if DEVICE_CAN
 
-#define CAN_NUM    1 // Number of CAN peripherals present in the STM32 serie
+#define CAN_NUM 1 // Number of CAN peripherals present in the STM32 serie
 
 #define CAN1_IRQ_RX_IRQN        CAN1_RX0_IRQn
 #define CAN1_IRQ_RX_VECT        CAN1_RX0_IRQHandler

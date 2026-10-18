@@ -59,5 +59,6 @@ void signaling_whois_TX();
 void signaling_frame_push();
 	
 void signaling_periodic_call();
+void signaling_get_counters(int* since_request, int* since_ack); // for the debug command
 	
 #endif

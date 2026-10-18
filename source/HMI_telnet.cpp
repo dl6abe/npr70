@@ -31,6 +31,7 @@
 static char current_rx_line[100];
 //static char HMI_out_str[100];
 static int current_rx_line_count = 0;
+static int rx_line_too_long = 0; // set when printable characters were dropped because the line buffer is full
 static int is_telnet_opened = 0;
 static int echo_ON = 1; 
 static int display_status_ongoing = 0;
@@ -46,7 +47,8 @@ static unsigned int telnet_last_activity;
 int telnet_loop (W5500_chip* W5500) {
 	static unsigned char previous_state = 0;
 	uint8_t RX_data[100];
-	uint8_t TX_data[100];
+	uint8_t TX_data[300]; // echo of up to 97 received bytes, a backspace echoes 3 bytes
+	static uint8_t iac_state = 0; // 0 normal, 1 after IAC, 2 after IAC WILL/WONT/DO/DONT (option byte follows)
 	uint8_t current_state; // Socket state as returned by the W5500
 	unsigned int timer_snapshot;
 	char loc_char;
@@ -82,6 +84,8 @@ int telnet_loop (W5500_chip* W5500) {
 		W5500_write_TX_buffer (W5500, TELNET_SOCKET, TX_data, 27, 0); //27
 		//HMI_printf("ready>");
 		is_telnet_opened = 1;
+		iac_state = 0;
+		rx_line_too_long = 0;
 		current_rx_line_count = 0;
 		echo_ON = 1;
 		display_status_ongoing = 0;
@@ -126,6 +130,9 @@ int telnet_loop (W5500_chip* W5500) {
 		}
 		//timeout 
 	}
+	if (RX_size > 97) {
+		RX_size = 97; // RX_data holds 3 header bytes plus the data, the rest is read in the next call
+	}
 	if (RX_size > 0) {
 		telnet_last_activity = GLOBAL_timer.read_us();
 		result=1;
@@ -133,11 +140,23 @@ int telnet_loop (W5500_chip* W5500) {
 		W5500_read_RX_buffer(W5500, TELNET_SOCKET, RX_data, RX_size+3);
 		// Note: RX_data starts with three extra bytes (W5500 register/block info) that are not
 		// part of the actual received data
-		RX_data[RX_size] = 0;
 		i = 3;
 		j = 0;
 		while (i < (RX_size+3)) {
 			loc_char = (char)RX_data[i];
+			if (iac_state == 1) { // second byte of a telnet command, may be in a later read than the IAC
+				if (RX_data[i] == 244) {//ctrl+C
+					HMI_cancel_current();
+				}
+				iac_state = ((RX_data[i] >= 251) && (RX_data[i] <= 254)) ? 2 : 0; // WILL WONT DO DONT take an option byte
+				i++;
+				continue;
+			}
+			if (iac_state == 2) { // option byte, ignored
+				iac_state = 0;
+				i++;
+				continue;
+			}
 			// printf("%02X %c\r\n", loc_char, loc_char);
 			if ( (loc_char >= 0x20) && (loc_char <= 0x7E) ) {//displayable char
 				if ( (current_rx_line_count < 98) && (echo_ON) ) {
@@ -147,15 +166,16 @@ int telnet_loop (W5500_chip* W5500) {
 					current_rx_line[current_rx_line_count] = loc_char;
 					current_rx_line_count++;
 				} else {
+					if (echo_ON) {
+						rx_line_too_long = 1;
+					}
 					i++;
 				}
 			} 
 			else { // special char
-				if (loc_char == 0xFF) {//IAC
-					if (RX_data[i+1] == 244) {//ctrl+C
-						HMI_cancel_current();
-					}
-					i = i + 3;
+				if ((uint8_t)loc_char == 0xFF) {//IAC, handled byte by byte with iac_state
+					iac_state = 1;
+					i++;
 				}
 				else if ( ( (loc_char == 0x08) || (loc_char == 0x7F) ) && (echo_ON) ) { //backspace
 					i++;
@@ -177,7 +197,12 @@ int telnet_loop (W5500_chip* W5500) {
 					current_rx_line_count++;
 					W5500_write_TX_buffer (W5500, TELNET_SOCKET, TX_data, j, 0);
 					j = 0;
-					HMI_line_parse (current_rx_line, current_rx_line_count);
+					if (rx_line_too_long) { // do not run a cut-off command
+						rx_line_too_long = 0;
+						HMI_printf("ERROR: line too long, maximum is 98 characters.\r\nready> ");
+					} else {
+						HMI_line_parse (current_rx_line, current_rx_line_count);
+					}
 					current_rx_line_count = 0;
 				}
 				else if (loc_char == 0x03) { //ctrl + C
@@ -209,6 +234,8 @@ int serial_term_loop (void) {
 					putc(loc_char, pc);
 					current_rx_line[current_rx_line_count] = loc_char;
 					current_rx_line_count++;
+				} else if (echo_ON) {
+					rx_line_too_long = 1;
 				}
 			}
 			else {
@@ -224,7 +251,12 @@ int serial_term_loop (void) {
 					printf("\r\n");
 					current_rx_line[current_rx_line_count] = 0;
 					current_rx_line_count++;
-					HMI_line_parse (current_rx_line, current_rx_line_count);
+					if (rx_line_too_long) {
+						rx_line_too_long = 0;
+						HMI_printf("ERROR: line too long, maximum is 98 characters.\r\nready> ");
+					} else {
+						HMI_line_parse (current_rx_line, current_rx_line_count);
+					}
 					current_rx_line_count = 0;
 				}
 				else if (loc_char == 0x03) {//ctrl + c
@@ -239,6 +271,7 @@ int serial_term_loop (void) {
 }
 
 static void HMI_print_help(void);
+static void HMI_debug_command(void);
 
 // One line per call, the console output buffer is small.
 static void HMI_print_help(void) {
@@ -256,6 +289,8 @@ static void HMI_print_help(void) {
 	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
 	HMI_printf("  version             firmware version and band\r\n");
 	HMI_printf("  uptime              time since the start of the modem\r\n");
+	HMI_printf("  phy                 Ethernet PHY status (debug), 'phy reset', 'phy mode <0-5|7>'\r\n");
+	HMI_printf("  debug               everything for a fault report in one output (no live display)\r\n");
 	HMI_printf("  reboot              restart the modem\r\n");
 	HMI_printf("  exit                close the telnet session (logout works as well)\r\n");
 	HMI_printf("Radio parameters:\r\n");
@@ -266,6 +301,44 @@ static void HMI_print_help(void) {
 	HMI_printf("  modem_IP netmask IP_begin master_IP_size client_req_size client_static_IP\r\n");
 	HMI_printf("  DHCP_active def_route_active def_route_val DNS_active DNS_value master_down_IP\r\n");
 	HMI_printf("  telnet_active telnet_routed Eth_mode (0 to 7, 7 = auto)\r\n");
+	HMI_printf("ready> ");
+}
+
+// Debug of the Ethernet PHY and of the RJ45 LEDs: status, reset, temporary mode (not saved)
+static void HMI_phy_lines(void) {
+	unsigned char reg;
+	unsigned int up;
+	reg = W5500_read_byte(W5500_p1, 0x002E, W5500_Common_register_block);
+	HMI_printf("PHYCFGR 0x%02X: link %s, %s, %s duplex, OPMD %i, OPMDC %i, config Eth_mode %i\r\n", reg, (reg & 0x01) ? "UP" : "DOWN", (reg & 0x02) ? "100M" : "10M", (reg & 0x04) ? "full" : "half", (reg >> 6) & 1, (reg >> 3) & 7, CONF_Eth_mode);
+	HMI_printf("W5500 VERSIONR 0x%02X (expect 0x04)\r\n", W5500_read_byte(W5500_p1, 0x0039, W5500_Common_register_block));
+	up = (unsigned int)snmp_uptime_seconds();
+	HMI_printf("link changes since start: %u, last change at uptime %u s (now %u s)\r\n", W5500_link_changes(), W5500_link_last_change_s(), up);
+	HMI_printf("re-configure state %i (1 = ready), runs %u, last reason 0x%02X at uptime %u s\r\n", W5500_reconf_state(), W5500_reconf_runs(), (unsigned int)W5500_reconf_why(), W5500_reconf_last_s());
+	HMI_printf("PHY self-heal: %u actions, last at uptime %u s, link down for %u s\r\n", W5500_heal_count(), W5500_heal_last_s(), W5500_link_down_s());
+	HMI_printf("GPIOA input: PA2=%i PA13=%i PA14=%i PA15=%i (ST-LINK lines, PA2 VCP TX, PA15 VCP RX)\r\n", (int)((GPIOA->IDR >> 2) & 1), (int)((GPIOA->IDR >> 13) & 1), (int)((GPIOA->IDR >> 14) & 1), (int)((GPIOA->IDR >> 15) & 1));
+}
+
+static void HMI_phy_command(char* arg1, char* arg2) {
+	unsigned int mode;
+	if (arg1 && (strcmp(arg1, "reset") == 0)) {
+		W5500_phy_reset_start();
+		HMI_printf("PHY reset, released after 300 ms, the Ethernet link restarts\r\nready> ");
+		return;
+	}
+	if (arg1 && (strcmp(arg1, "mode") == 0)) {
+		if ( (arg2 == NULL) || (sscanf(arg2, "%u", &mode) != 1) || (mode > 7) || (mode == 6) ) {
+			HMI_printf("ERROR: use 'phy mode <0-5|7>' (6 = power down is not allowed)\r\nready> ");
+			return;
+		}
+		W5500_phy_set_mode(W5500_p1, (unsigned char)mode);
+		HMI_printf("PHY mode %u set (not saved, 7 = auto negotiation)\r\nready> ", mode);
+		return;
+	}
+	if (arg1) {
+		HMI_printf("ERROR: use 'phy', 'phy reset' or 'phy mode <0-5|7>'\r\nready> ");
+		return;
+	}
+	HMI_phy_lines();
 	HMI_printf("ready> ");
 }
 
@@ -283,7 +356,10 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 	if (loc_command_str) {
 		if (strcmp(loc_command_str, "radio") == 0) {
 			command_understood = 1;
-			if (strcmp(loc_param1_str, "on") == 0) {
+			if (loc_param1_str == NULL) {
+				HMI_printf("ERROR: use 'radio on' or 'radio off'.\r\nready> ");
+			}
+			else if (strcmp(loc_param1_str, "on") == 0) {
 				if (CONF_radio_state_ON_OFF == 0) {
 					RADIO_on(1, 1, 1);
 				}
@@ -300,7 +376,11 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 		
 		if (strcmp(loc_command_str, "TX_test") == 0) {
 			command_understood = 1;
-			HMI_TX_test(loc_param1_str);
+			if (loc_param1_str) {
+				HMI_TX_test(loc_param1_str);
+			} else {
+				HMI_printf("ERROR: use 'TX_test <seconds>'.\r\nready> ");
+			}
 		}
 		if (strcmp(loc_command_str, "status") == 0) {//display status
 			command_understood = 1;
@@ -314,7 +394,10 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 		// display, show is the same command
 		if ((strcmp(loc_command_str, "display") == 0) || (strcmp(loc_command_str, "show") == 0)) {
 			command_understood = 1;
-			if (strcmp(loc_param1_str, "config") == 0) {//display config
+			if (loc_param1_str == NULL) {
+				HMI_printf("ERROR: use 'display config', 'display static' or 'display DHCP_ARP'.\r\nready> ");
+			}
+			else if (strcmp(loc_param1_str, "config") == 0) {//display config
 				HMI_display_config();
 			}
 			else if (strcmp(loc_param1_str, "static") == 0) {//display static alloc
@@ -373,9 +456,17 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			uint32_t up = snmp_uptime_seconds(); // the clock SNMP sysUpTime uses
 			HMI_printf("uptime: %lu days %02lu:%02lu:%02lu\r\nready> ", (unsigned long)(up / 86400), (unsigned long)((up / 3600) % 24), (unsigned long)((up / 60) % 60), (unsigned long)(up % 60));
 		}
+		if (strcmp(loc_command_str, "phy") == 0) {
+			command_understood = 1;
+			HMI_phy_command(loc_param1_str, loc_param2_str);
+		}
+		if (strcmp(loc_command_str, "debug") == 0) {
+			command_understood = 1;
+			HMI_debug_command();
+		}
 		if (strcmp(loc_command_str, "version") == 0) {
 			command_understood = 1;
-			HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\nready> ", FW_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
+			HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\nready> ", FW_VERSION, MBED_OS_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
 		}
 		// exit, logout is the same command
 		if ((strcmp(loc_command_str, "exit") == 0) || (strcmp(loc_command_str, "logout") == 0)) {
@@ -419,24 +510,24 @@ void HMI_TX_test(char* duration_txt) {
 		sscanf (duration_txt, "%i", &duration);
 		HMI_printf("reconfiguring radio...\r\n");
 		SI4463_configure_all();
-		wait_ms(50);
+		ThisThread::sleep_for(50);
 		TDMA_init_all();
 		//SI4463_radio_start();
 		
-		wait_ms(1);
+		ThisThread::sleep_for(1);
 		G_SI4463->RX_TX_state = 0;
 		SI4463_clear_IT(G_SI4463, 0, 0);
-		wait_ms(10);
+		ThisThread::sleep_for(10);
 		CONF_radio_state_ON_OFF = 1;
 		SI4463_TX_to_RX_transition();
 		
-		wait_ms(10);
+		ThisThread::sleep_for(10);
 		CONF_radio_state_ON_OFF = 0;
 		if (!is_TDMA_master) {
 			my_client_radio_connexion_state = 1;
 			my_radio_client_ID = 0x7E;
 		}
-		wait_ms(50);
+		ThisThread::sleep_for(50);
 		
 		TDMA_NULL_frame_init(70);
 		HMI_printf("radio transmit test %i seconds...\r\n", duration);
@@ -489,7 +580,7 @@ static char HMI_yes_no[2][4]={'n','o',0,0, 'y','e','s',0};
 // static char HMI_trans_modes[2][4]={'I','P',0,0,'E','t','h',0};
 static char HMI_master_FDD[3][5]={'n','o',0,0,0,'d','o','w','n',0,'u','p',0,0,0};
 
-void HMI_display_config(void) {
+static void HMI_config_lines(void) {
 	unsigned char IP_loc[8];
 
 	HMI_printf("CONFIG:\r\n  callsign: '%s'\r\n  is_master: %s\r\n  MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", CONF_radio_my_callsign+2, HMI_yes_no[is_TDMA_master],CONF_modem_MAC[0],CONF_modem_MAC[1],CONF_modem_MAC[2],CONF_modem_MAC[3],CONF_modem_MAC[4],CONF_modem_MAC[5]);
@@ -526,301 +617,340 @@ void HMI_display_config(void) {
 		HMI_printf("  IP_begin: %i.%i.%i.%i\r\n", IP_loc[0], IP_loc[1],IP_loc[2],IP_loc[3]);
 		HMI_printf("  client_req_size: %ld\r\n  DHCP_active: %s\r\n", CONF_radio_IP_size_requested, HMI_yes_no[LAN_conf_saved.DHCP_server_active]);
 	}
+}
+
+void HMI_display_config(void) {
+	HMI_config_lines();
 	HMI_printf("ready> ");
+}
+
+// One output with what a fault report needs: state of the link, the radio, the Ethernet side, the
+// counters and the configuration. Everything is read, nothing is changed. Lines stay short, the
+// console buffer is HMI_out_str[120].
+static void HMI_debug_command(void) {
+	static const char* const state_text[6] = {"unknown", "waiting connection", "connected", "rejected", "disconnecting", "disconnected"};
+	unsigned char IP_c[8];
+	unsigned int state, alloc_age, now_us, i;
+	unsigned char mf_ID, mf_mask;
+	int since_request, since_ack;
+	unsigned long int up;
+	now_us = GLOBAL_timer.read_us();
+	up = snmp_uptime_seconds();
+	HMI_printf("== debug ==\r\n");
+	HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\n", FW_VERSION, MBED_OS_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
+	HMI_printf("uptime: %lu s (%lu days %02lu:%02lu:%02lu)\r\n", up, up / 86400, (up / 3600) % 24, (up / 60) % 60, up % 60);
+	HMI_printf("role: %s, callsign %s, radio %s, RF_power %i, temp %i degC\r\n", is_TDMA_master ? "master" : "client", CONF_radio_my_callsign + 2, CONF_radio_state_ON_OFF ? "ON" : "OFF", (int)CONF_radio_PA_PWR, G_temperature_SI4463);
+	HMI_printf("last radio frame seen %u ms ago\r\n", (unsigned int)((now_us - last_rframe_seen) / 1000));
+	if (!is_TDMA_master) {
+		state = my_client_radio_connexion_state;
+		signaling_get_counters(&since_request, &since_ack);
+		TDMA_get_slave_slot(&alloc_age, &mf_ID, &mf_mask);
+		HMI_printf("== connection (client) ==\r\n");
+		HMI_printf("state %u (%s), own ID 0x%02X, rejection reason %u\r\n", state, state_text[(state < 6) ? state : 0], my_radio_client_ID, G_connect_rejection_reason);
+		HMI_printf("periods since last request %i, since last ACK %i\r\n", since_request, since_ack);
+		HMI_printf("TX slot: offset %u us, max burst %u us, alloc age %u, multiframe ID %u mask %u\r\n", offset_time_TX_slave, time_max_TX_burst, alloc_age, mf_ID, mf_mask);
+		// the master top is stamped with the 24 bit radio timer, so compare modulo 2^24 (about 16.7 s)
+		HMI_printf("last master top %u ms ago (modulo 16777 ms), TA %.1f km\r\n", (unsigned int)(((now_us - TDMA_slave_last_master_top) & 0xFFFFFF) / 1000), (my_radio_client_ID < radio_addr_table_size) ? 0.15 * (float)TDMA_table_TA[my_radio_client_ID] : 0.0);
+		if (state == 2) { // before the connection the filtered values still build up from 0
+			HMI_printf("downlink RSSI %.1f dBm, ERR %.2f %%\r\n", ((float)G_downlink_RSSI / 256 / 2 - 136), ((float)G_downlink_BER) / 500);
+		} else {
+			HMI_printf("downlink RSSI n/a, ERR n/a (not connected)\r\n");
+		}
+		if ( (state == 2) && (my_radio_client_ID < radio_addr_table_size) ) {
+			HMI_printf("uplink RSSI %.1f dBm, ERR %.2f %%\r\n", ((float)G_radio_addr_table_RSSI[my_radio_client_ID] / 2 - 136), ((float)G_radio_addr_table_BER[my_radio_client_ID]) / 500);
+		} else {
+			HMI_printf("uplink RSSI n/a, ERR n/a (not connected)\r\n");
+		}
+		HMI_printf("master callsign %s\r\n", CONF_radio_master_callsign + 2);
+		IP_int2char(LAN_conf_applied.DHCP_range_start, IP_c);
+		IP_int2char(LAN_conf_applied.LAN_modem_IP, IP_c + 4);
+		HMI_printf("applied range %i.%i.%i.%i size %lu, modem IP %i.%i.%i.%i\r\n", IP_c[0], IP_c[1], IP_c[2], IP_c[3], LAN_conf_applied.DHCP_range_size, IP_c[4], IP_c[5], IP_c[6], IP_c[7]);
+	} else {
+		HMI_printf("== clients (master) ==\r\n");
+		for (i = 0; i < radio_addr_table_size; i++) {
+			if (CONF_radio_addr_table_status[i]) {
+				IP_int2char(CONF_radio_addr_table_IP_begin[i], IP_c);
+				HMI_printf("ID %u %s status %i IP %i.%i.%i.%i size %lu\r\n", i, CONF_radio_addr_table_callsign[i] + 2, (int)CONF_radio_addr_table_status[i], IP_c[0], IP_c[1], IP_c[2], IP_c[3], CONF_radio_addr_table_IP_size[i]);
+				HMI_printf("  last ACK %u s ago, TA %.1f km, RSSI %.1f dBm, ERR %.2f %%\r\n", (now_us - CONF_radio_addr_table_date[i]) / 1000000, 0.15 * (float)(TDMA_table_TA[i] / 10), (float)(G_radio_addr_table_RSSI[i] >> 8) / 2 - 136, ((float)G_radio_addr_table_BER[i]) / 500);
+				HMI_printf("  FEC ok %u fixed %u lost %u\r\n", G_rx_fec_client_ok[i], G_rx_fec_client_fixed[i], G_rx_fec_client_lost[i]);
+			}
+		}
+	}
+	HMI_printf("== counters ==\r\n");
+	HMI_printf("RX_Eth_IPv4 %i, TX_radio_IPv4 %i, RX_radio_IPv4 %i\r\n", RX_Eth_IPv4_counter, TX_radio_IPv4_counter, RX_radio_IPv4_counter);
+	HMI_printf("to Ethernet: sent %u, held for ARP %u, no destination %u\r\n", G_eth_tx_ok, G_eth_tx_wait, G_radio_unrouted);
+	HMI_printf("FEC ok %u fixed %u lost %u, seg_gap %u\r\n", G_rx_fec_ok, G_rx_fec_fixed, G_rx_fec_lost, G_rx_seg_gap);
+	HMI_printf("== phy ==\r\n");
+	HMI_phy_lines();
+	HMI_printf("== config ==\r\n");
+	HMI_config_lines();
+	HMI_printf("== end of debug ==\r\nready> ");
 }
 
 void HMI_display_static(void) {
 	
 }
 
-void HMI_set_command(char* loc_param1, char* loc_param2) {
-	int temp;
-	unsigned char temp_uchar;
-	unsigned long int temp_uint;
-	float frequency;
-	// unsigned char previous_freq_band;
-	char DHCP_warning[50];
-	if ((loc_param1) && (loc_param2)) {
-		if (strcmp(loc_param1, "callsign") == 0) {
-			RADIO_off_if_necessary(1);
-			strcpy (CONF_radio_my_callsign+2, loc_param2);
-			CONF_radio_my_callsign[0] = CONF_modem_MAC[4];
-			CONF_radio_my_callsign[1] = CONF_modem_MAC[5];
-			CONF_radio_my_callsign[15] = 0;
-			RADIO_restart_if_necessary(1, 0, 1);
-			HMI_printf("new callsign '%s'\r\nready> ", CONF_radio_my_callsign+2);
-		} 
-		else if (strcmp(loc_param1, "is_master") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				RADIO_off_if_necessary(1);
-				is_TDMA_master = (temp_uchar == 1);
-				RADIO_restart_if_necessary(1, 0, 1);
-				if ( (is_TDMA_master) && (LAN_conf_saved.DHCP_server_active == 1) ) {
-					strcpy (DHCP_warning, " (warning, DHCP inhibited in master mode)"); 
-				} else {
-					strcpy (DHCP_warning, ""); 
-				}
-				HMI_printf("Master '%s'%s\r\nready> ", loc_param2, DHCP_warning);
-			}
-		}
-		else if (strcmp(loc_param1, "telnet_active") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				if(is_telnet_opened) { HMI_exit(); }
-				is_telnet_active = temp_uchar;
-				HMI_printf("telnet active '%s'\r\nready> ", loc_param2);
-			}
-		}
-		else if (strcmp(loc_param1, "telnet_routed") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				is_telnet_routed = temp_uchar;
-				//W5500_re_configure_gateway(W5500_p1);
-				HMI_printf("telnet routed '%s'\r\nready> ", loc_param2);
-			}
-		}
-		else if (strcmp(loc_param1, "DNS_active") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_DNS_activ = temp_uchar;
-				RADIO_restart_if_necessary(1, 0, 1);
-				HMI_printf("DNS active '%s'\r\nready> ", loc_param2);
-			}
-		}
-		else if (strcmp(loc_param1, "def_route_active") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_def_route_activ = temp_uchar;
-				//W5500_re_configure_gateway(W5500_p1);
-				RADIO_restart_if_necessary(1, 0, 1);
-				HMI_printf("default route active '%s'\r\nready> ", loc_param2);
-			}
-		}
-		else if (strcmp(loc_param1, "master_FDD") == 0) {
-			if(strcmp(loc_param2,"no") == 0) {
-				CONF_master_FDD = 0;
-				RADIO_off_if_necessary(1);
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-			else if(strcmp(loc_param2,"down") == 0) {
-				CONF_master_FDD = 1;
-				RADIO_off_if_necessary(1);
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-			else if(strcmp(loc_param2,"up") == 0) {
-				CONF_master_FDD = 2;
-				RADIO_off_if_necessary(1);
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-			else {
-				HMI_printf("  wrong value\r\n");
-			}
-			HMI_printf("ready> ");
-		}
-		//else if (strcmp(loc_param1, "trans_method") == 0) {
-		//	if(strcmp(loc_param2,"IP") == 0) {
-		//		CONF_transmission_method = 0;
-		//		RADIO_off_if_necessary(1);
-		//		RADIO_restart_if_necessary(1, 0, 1);
-		//	}
-		//	else if(strcmp(loc_param2,"Eth") == 0) {
-		//		CONF_transmission_method = 1;
-		//		RADIO_off_if_necessary(1);
-		//		RADIO_restart_if_necessary(1, 0, 1);
-		//	}
-		//	else {
-		//		HMI_printf("  wrong value\r\n");
-		//	}
-		//	HMI_printf("ready> ");
-		//}
-		//else if (strcmp(loc_param1, "client_static_IP") == 0) {
-		//	temp_uchar = HMI_yes_no_2int(loc_param2);
-		//	if ( (temp_uchar==0) || (temp_uchar==1) ) {
-		//		RADIO_off_if_necessary(1);
-		//		CONF_radio_static_IP_requested = temp_uchar;
-		//		HMI_printf("client static IP '%s'\r\nready> ", loc_param2);
-		//		RADIO_restart_if_necessary(1, 0, 1);
-		//	}
-		//}
-		else if (strcmp(loc_param1, "radio_on_at_start") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				CONF_radio_default_state_ON_OFF = temp_uchar;
-				HMI_printf("radio_on_at_start '%s'\r\nready> ", loc_param2);
-			}
-		}
-		else if (strcmp(loc_param1, "DHCP_active") == 0) {
-			temp_uchar = HMI_yes_no_2int(loc_param2);
-			if ( (temp_uchar==0) || (temp_uchar==1) ) {
-				LAN_conf_saved.DHCP_server_active = temp_uchar;
-				if ( (is_TDMA_master) && (LAN_conf_saved.DHCP_server_active == 1) ) {
-					strcpy (DHCP_warning, " (warning, DHCP inhibited in master mode)"); 
-				} else {
-					strcpy (DHCP_warning, ""); 
-				}
-				HMI_printf("DHCP_active: '%s'%s\r\nready> ", loc_param2, DHCP_warning);
-			}
-		}
-		else if (strcmp(loc_param1, "modem_IP") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_modem_IP = temp_uint;
-				//HMI_force_exit();
-				//W5500_re_configure();
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "netmask") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_subnet_mask = temp_uint;
-				//HMI_force_exit();
-				//W5500_re_configure();
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "def_route_val") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_def_route = temp_uint;
-				//W5500_re_configure_gateway(W5500_p1);
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "DNS_value") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				LAN_conf_saved.LAN_DNS_value = temp_uint;
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "IP_begin") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				CONF_radio_IP_start = temp_uint;
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "master_down_IP") == 0) {
-			temp_uint = HMI_str2IP(loc_param2);
-			if (temp_uint !=0) {
-				RADIO_off_if_necessary(1);
-				CONF_master_down_IP = temp_uint;
-				RADIO_restart_if_necessary(1, 0, 1);
-			}
-		}
-		else if (strcmp(loc_param1, "master_IP_size") == 0) {
-			temp = sscanf (loc_param2, "%ld", &temp_uint);
-			if ( (temp==1) && (temp_uint!=0) ) {
-				RADIO_off_if_necessary(1);
-				CONF_radio_IP_size = temp_uint;
-				RADIO_restart_if_necessary(1, 0, 1);
-				HMI_printf("OK\r\nready> ");
-			}
-			else {
-				HMI_printf("wrong value\r\nready> ");
-			}
-		}
-		else if (strcmp(loc_param1, "client_req_size") == 0) {
-			temp = sscanf (loc_param2, "%ld", &temp_uint);
-			if ( (temp==1) && (temp_uint!=0) ) {
-				RADIO_off_if_necessary(1);
-				CONF_radio_IP_size_requested = temp_uint;
-				RADIO_restart_if_necessary(1, 0, 1);
-				HMI_printf("OK\r\nready> ");
-			}
-			else {
-				HMI_printf("wrong value\r\nready> ");
-			}
-		}
+// Handlers of the 'set <parameter> <value>' command, one per parameter. Each one checks its value,
+// applies it and prints the answer including the next prompt.
 
-		else if (strcmp(loc_param1, "frequency") == 0) {
-			temp = sscanf (loc_param2, "%f", &frequency);
-			if ( (temp == 1) && (frequency<=FREQ_RANGE_MAX) && (frequency>FREQ_RANGE_MIN) ) {
-				RADIO_off_if_necessary(0);
-				frequency = (frequency - FREQ_RANGE_MIN)*1000 + 0.3; 
-				CONF_frequency_HD = (short int)frequency;
-				//RADIO_compute_freq_params();//REMOVE TEST
-				RADIO_restart_if_necessary(0, 1, 1);
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("ERROR: invalid value for frequency.\r\nready> ");
+static const char* HMI_DHCP_master_warning(void) {
+	if ( (is_TDMA_master) && (LAN_conf_saved.DHCP_server_active == 1) ) {
+		return " (warning, DHCP inhibited in master mode)";
+	}
+	return "";
+}
+
+// Common part of the IP address parameters that need a radio restart.
+static void HMI_set_IP_value(char* value, unsigned long int* target) {
+	unsigned long int temp_uint = HMI_str2IP(value);
+	if (temp_uint != 0) {
+		RADIO_off_if_necessary(1);
+		*target = temp_uint;
+		RADIO_restart_if_necessary(1, 0, 1);
+	}
+}
+
+// Common part of the size parameters that need a radio restart.
+static void HMI_set_size_value(char* value, unsigned long int* target) {
+	unsigned long int temp_uint;
+	int temp = sscanf (value, "%ld", &temp_uint);
+	if ( (temp==1) && (temp_uint!=0) ) {
+		RADIO_off_if_necessary(1);
+		*target = temp_uint;
+		RADIO_restart_if_necessary(1, 0, 1);
+		HMI_printf("OK\r\nready> ");
+	}
+	else {
+		HMI_printf("wrong value\r\nready> ");
+	}
+}
+
+static void HMI_set_callsign(char* value) {
+	if (strlen(value) > 13) { // the field CONF_radio_my_callsign holds 2 MAC bytes, 13 characters and the end
+		HMI_printf("ERROR: callsign too long, maximum is 13 characters.\r\nready> ");
+		return;
+	}
+	RADIO_off_if_necessary(1);
+	strcpy (CONF_radio_my_callsign+2, value);
+	CONF_radio_my_callsign[0] = CONF_modem_MAC[4];
+	CONF_radio_my_callsign[1] = CONF_modem_MAC[5];
+	CONF_radio_my_callsign[15] = 0;
+	RADIO_restart_if_necessary(1, 0, 1);
+	HMI_printf("new callsign '%s'\r\nready> ", CONF_radio_my_callsign+2);
+}
+
+static void HMI_set_is_master(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		RADIO_off_if_necessary(1);
+		is_TDMA_master = (temp_uchar == 1);
+		RADIO_restart_if_necessary(1, 0, 1);
+		HMI_printf("Master '%s'%s\r\nready> ", value, HMI_DHCP_master_warning());
+	}
+}
+
+static void HMI_set_telnet_active(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		if(is_telnet_opened) { HMI_exit(); }
+		is_telnet_active = temp_uchar;
+		HMI_printf("telnet active '%s'\r\nready> ", value);
+	}
+}
+
+static void HMI_set_telnet_routed(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		is_telnet_routed = temp_uchar;
+		HMI_printf("telnet routed '%s'\r\nready> ", value);
+	}
+}
+
+static void HMI_set_DNS_active(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		RADIO_off_if_necessary(1);
+		LAN_conf_saved.LAN_DNS_activ = temp_uchar;
+		RADIO_restart_if_necessary(1, 0, 1);
+		HMI_printf("DNS active '%s'\r\nready> ", value);
+	}
+}
+
+static void HMI_set_def_route_active(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		RADIO_off_if_necessary(1);
+		LAN_conf_saved.LAN_def_route_activ = temp_uchar;
+		RADIO_restart_if_necessary(1, 0, 1);
+		HMI_printf("default route active '%s'\r\nready> ", value);
+	}
+}
+
+static void HMI_set_master_FDD(char* value) {
+	if(strcmp(value,"no") == 0) {
+		CONF_master_FDD = 0;
+	}
+	else if(strcmp(value,"down") == 0) {
+		CONF_master_FDD = 1;
+	}
+	else if(strcmp(value,"up") == 0) {
+		CONF_master_FDD = 2;
+	}
+	else {
+		HMI_printf("  wrong value\r\n");
+		HMI_printf("ready> ");
+		return;
+	}
+	RADIO_off_if_necessary(1);
+	RADIO_restart_if_necessary(1, 0, 1);
+	HMI_printf("ready> ");
+}
+
+static void HMI_set_radio_on_at_start(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		CONF_radio_default_state_ON_OFF = temp_uchar;
+		HMI_printf("radio_on_at_start '%s'\r\nready> ", value);
+	}
+}
+
+static void HMI_set_DHCP_active(char* value) {
+	unsigned char temp_uchar = HMI_yes_no_2int(value);
+	if ( (temp_uchar==0) || (temp_uchar==1) ) {
+		LAN_conf_saved.DHCP_server_active = temp_uchar;
+		HMI_printf("DHCP_active: '%s'%s\r\nready> ", value, HMI_DHCP_master_warning());
+	}
+}
+
+static void HMI_set_modem_IP(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_modem_IP); }
+static void HMI_set_netmask(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_subnet_mask); }
+static void HMI_set_def_route_val(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_def_route); }
+static void HMI_set_DNS_value(char* value) { HMI_set_IP_value(value, &LAN_conf_saved.LAN_DNS_value); }
+static void HMI_set_IP_begin(char* value) { HMI_set_IP_value(value, &CONF_radio_IP_start); }
+static void HMI_set_master_down_IP(char* value) { HMI_set_IP_value(value, &CONF_master_down_IP); }
+static void HMI_set_master_IP_size(char* value) { HMI_set_size_value(value, &CONF_radio_IP_size); }
+static void HMI_set_client_req_size(char* value) { HMI_set_size_value(value, &CONF_radio_IP_size_requested); }
+
+static void HMI_set_frequency(char* value) {
+	float frequency;
+	int temp = sscanf (value, "%f", &frequency);
+	if ( (temp == 1) && (frequency<=FREQ_RANGE_MAX) && (frequency>FREQ_RANGE_MIN) ) {
+		RADIO_off_if_necessary(0);
+		frequency = (frequency - FREQ_RANGE_MIN)*1000 + 0.3; 
+		CONF_frequency_HD = (short int)frequency;
+		RADIO_restart_if_necessary(0, 1, 1);
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("ERROR: invalid value for frequency.\r\nready> ");
+	}
+}
+
+static void HMI_set_freq_shift(char* value) {
+	float frequency;
+	int temp = sscanf (value, "%f", &frequency);
+	if ( (temp == 1) && (frequency<=10) && (frequency>=-10) ) {
+		RADIO_off_if_necessary(0);
+		frequency = (frequency*1000);
+		CONF_freq_shift = (short int)frequency;
+		RADIO_restart_if_necessary(0, 1, 1);
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("ERROR: invalid value for freq_shift.\r\nready> ");
+	}
+}
+
+static void HMI_set_RF_power(char* value) {
+	int temp;
+	if ( (sscanf (value, "%i", &temp) == 1) && (temp<128) ) {
+		RADIO_off_if_necessary(0);
+		CONF_radio_PA_PWR = temp;
+		SI4463_set_power(G_SI4463);
+		RADIO_restart_if_necessary(0, 0, 1);
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("ERROR: maximum RF_power value is 127.\r\nready> ");
+	}
+}
+
+static void HMI_set_Eth_mode(char* value) {
+	int temp;
+	if ( (sscanf (value, "%i", &temp) == 1) && (temp >= 0) && (temp <= 7) ) {
+		CONF_Eth_mode = temp;
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("error : max Eth_mode value 7\r\nready> ");
+	}
+}
+
+static void HMI_set_modulation(char* value) {
+	int temp;
+	int found = sscanf (value, "%i", &temp);
+	unsigned char temp_uchar = temp;
+	if ( (found == 1) && ( ((temp_uchar>=11)&&(temp_uchar<=14)) || ((temp_uchar>=20)&&(temp_uchar<=24)) ) ) {
+		RADIO_off_if_necessary(1);
+		CONF_radio_modulation = temp_uchar;
+		RADIO_restart_if_necessary(1, 1, 1);
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("ERROR: invalid value for modulation.\r\nready> ");
+	}
+}
+
+static void HMI_set_radio_netw_ID(char* value) {
+	int temp;
+	int found = sscanf (value, "%i", &temp);
+	unsigned char temp_uchar = temp;
+	if ( (found == 1) && (temp_uchar <= 15) ) {
+		RADIO_off_if_necessary(1);
+		CONF_radio_network_ID = temp_uchar;
+		RADIO_restart_if_necessary(1, 1, 1);
+		HMI_printf("OK\r\nready> ");
+	} else {
+		HMI_printf("ERROR: invalid network ID, maximum is 15.\r\nready> ");
+	}
+}
+
+typedef struct {
+	const char* name;
+	void (*handler)(char* value);
+} HMI_set_entry_T;
+
+static const HMI_set_entry_T HMI_set_table[] = {
+	{"callsign", HMI_set_callsign},
+	{"is_master", HMI_set_is_master},
+	{"telnet_active", HMI_set_telnet_active},
+	{"telnet_routed", HMI_set_telnet_routed},
+	{"DNS_active", HMI_set_DNS_active},
+	{"def_route_active", HMI_set_def_route_active},
+	{"master_FDD", HMI_set_master_FDD},
+	{"radio_on_at_start", HMI_set_radio_on_at_start},
+	{"DHCP_active", HMI_set_DHCP_active},
+	{"modem_IP", HMI_set_modem_IP},
+	{"netmask", HMI_set_netmask},
+	{"def_route_val", HMI_set_def_route_val},
+	{"DNS_value", HMI_set_DNS_value},
+	{"IP_begin", HMI_set_IP_begin},
+	{"master_down_IP", HMI_set_master_down_IP},
+	{"master_IP_size", HMI_set_master_IP_size},
+	{"client_req_size", HMI_set_client_req_size},
+	{"frequency", HMI_set_frequency},
+	{"freq_shift", HMI_set_freq_shift},
+	{"RF_power", HMI_set_RF_power},
+	{"Eth_mode", HMI_set_Eth_mode},
+	{"modulation", HMI_set_modulation},
+	{"radio_netw_ID", HMI_set_radio_netw_ID},
+};
+
+void HMI_set_command(char* loc_param1, char* loc_param2) {
+	if ((loc_param1) && (loc_param2)) {
+		for (unsigned int i = 0; i < sizeof(HMI_set_table)/sizeof(HMI_set_table[0]); i++) {
+			if (strcmp(loc_param1, HMI_set_table[i].name) == 0) {
+				HMI_set_table[i].handler(loc_param2);
+				return;
 			}
 		}
-		else if (strcmp(loc_param1, "freq_shift") == 0) {
-			temp = sscanf (loc_param2, "%f", &frequency);
-			if ( (temp == 1) && (frequency<=10) && (frequency>=-10) ) {
-				RADIO_off_if_necessary(0);
-				frequency = (frequency*1000);
-				CONF_freq_shift = (short int)frequency;
-				//RADIO_compute_freq_params();//REMOVE TEST
-				//if (CONF_frequency_band == previous_freq_band) {
-				//	RADIO_restart_if_necessary(0, 0, 1);
-				//}else {
-				RADIO_restart_if_necessary(0, 1, 1);
-				//}
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("ERROR: invalid value for freq_shift.\r\nready> ");
-			}
-		}
-		else if (strcmp(loc_param1, "RF_power") == 0) {
-			temp_uint = sscanf (loc_param2, "%i", &temp); 
-			if ( (temp_uint == 1) && (temp<128) ) {
-				RADIO_off_if_necessary(0);
-				CONF_radio_PA_PWR = temp;
-				SI4463_set_power(G_SI4463);
-				RADIO_restart_if_necessary(0, 0, 1);
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("ERROR: maximum RF_power value is 127.\r\nready> ");
-			}
-		}
-		else if (strcmp(loc_param1, "Eth_mode") == 0) {
-			temp_uint = sscanf (loc_param2, "%i", &temp); 
-			if ( (temp_uint == 1) && (temp >= 0) && (temp <= 7) ) {
-				CONF_Eth_mode = temp;
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("error : max Eth_mode value 7\r\nready> ");
-			}
-		}
-		else if (strcmp(loc_param1, "modulation") == 0) {
-			temp_uint = sscanf (loc_param2, "%i", &temp);
-			temp_uchar = temp;
-			//if ( (temp_uint == 1) && ((temp_uchar==13)||(temp_uchar==14)||(temp_uchar==22)||(temp_uchar==23)||(temp_uchar==24)) ) {
-			if ( (temp_uint == 1) && ( ((temp_uchar>=11)&&(temp_uchar<=14)) || ((temp_uchar>=20)&&(temp_uchar<=24)) ) ) {
-				RADIO_off_if_necessary(1);
-				CONF_radio_modulation = temp_uchar;
-				RADIO_restart_if_necessary(1, 1, 1);
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("ERROR: invalid value for modulation.\r\nready> ");
-			}
-		}
-		else if (strcmp(loc_param1, "radio_netw_ID") == 0) {
-			temp_uint = sscanf (loc_param2, "%i", &temp);
-			temp_uchar = temp;
-			if ( (temp_uint == 1) && (temp_uchar <= 15) ) {
-				RADIO_off_if_necessary(1);
-				CONF_radio_network_ID = temp_uchar;
-				RADIO_restart_if_necessary(1, 1, 1);
-				HMI_printf("OK\r\nready> ");
-			} else {
-				HMI_printf("ERROR: invalid network ID, maximum is 15.\r\nready> ");
-			}
-		}
-		else {
-			HMI_printf("ERROR: unknown config parameter, type 'help' for the list.\r\nready> ");
-		}
+		HMI_printf("ERROR: unknown config parameter, type 'help' for the list.\r\nready> ");
 	} else {
 		HMI_printf("ERROR: 'set' needs a parameter and a value, for example: set RF_power 6\r\nready> ");
 	}
@@ -918,10 +1048,13 @@ void HMI_print_who(void) {
 }
 
 void HMI_print_status(void) {
-	static char text_radio_status[3][22] = {
+	static char text_radio_status[6][22] = { // indexed by my_client_radio_connexion_state
+		"unknown",
 		"waiting connection",
 		"connected",
-		"connection rejected"
+		"connection rejected",
+		"disconnecting",
+		"disconnected"
 	};
 	static char text_reject_reason[2][15] = {
 		"IP requested",
@@ -962,15 +1095,20 @@ void HMI_print_status(void) {
 	} else {
 		loc_downlink_bw = G_downlink_bandwidth_temp * 0.004;
 		loc_uplink_bw =  G_uplink_bandwidth_temp * 0.004;
-		TA_loc = TDMA_table_TA[my_radio_client_ID];
+		// before the connection the client ID is not a table index (0x7E)
+		TA_loc = (my_radio_client_ID < radio_addr_table_size) ? TDMA_table_TA[my_radio_client_ID] : 0;
 	}
 	if (CONF_radio_state_ON_OFF == 0) {
 		HMI_printf("%s   %i status: radio OFF               \r\n", temp_string, slow_counter);
 	}
 	else if (my_client_radio_connexion_state == 0x03) {
-		HMI_printf("%s   %i status: rejected because too many %s \r\n", temp_string, slow_counter, text_reject_reason[G_connect_rejection_reason-2]);
+		if ( (G_connect_rejection_reason == 2) || (G_connect_rejection_reason == 3) ) { // the reason comes from the master
+			HMI_printf("%s   %i status: rejected because too many %s \r\n", temp_string, slow_counter, text_reject_reason[G_connect_rejection_reason-2]);
+		} else {
+			HMI_printf("%s   %i status: rejected, reason code %i \r\n", temp_string, slow_counter, G_connect_rejection_reason);
+		}
 	} else {
-		HMI_printf("%s   %i status: %s TA:%.1fkm Temp:%idegC   \r\n", temp_string, slow_counter, text_radio_status[my_client_radio_connexion_state-1], 0.15*(float)TA_loc, G_temperature_SI4463);
+		HMI_printf("%s   %i status: %s TA:%.1fkm Temp:%idegC   \r\n", temp_string, slow_counter, text_radio_status[(my_client_radio_connexion_state < 6) ? my_client_radio_connexion_state : 0], 0.15*(float)TA_loc, G_temperature_SI4463);
 	}
 	//HMI_printf("   TX buff filling %i\r\n", (TX_buff_ext_WR_pointer - TX_buff_ext_RD_pointer)*128);//!!!test
 	if ( (is_TDMA_master) && (CONF_master_FDD == 2) ) {
@@ -989,7 +1127,7 @@ void HMI_print_status(void) {
 		HMI_printf("   DOWNLINK - bandwidth: %.1f RSSI:       ERR:      \r\n", loc_downlink_bw);
 		
 	}
-	if ( (!is_TDMA_master) && (my_client_radio_connexion_state == 2) ) {
+	if ( (!is_TDMA_master) && (my_client_radio_connexion_state == 2) && (my_radio_client_ID < radio_addr_table_size) ) {
 		HMI_printf("   UPLINK -   bandwidth:%.1f RSSI:%.1f ERR:%.2f%%    \r\nCTRL+c to exit...\r\n", loc_uplink_bw, ((float)G_radio_addr_table_RSSI[my_radio_client_ID]/2-136), ((float)G_radio_addr_table_BER[my_radio_client_ID])/500);
 	} else {
 		HMI_printf("   UPLINK -   bandwidth:%.1f RSSI:     ERR:      \r\nCTRL+c to exit...\r\n", loc_uplink_bw);

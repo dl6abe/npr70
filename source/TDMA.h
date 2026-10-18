@@ -33,6 +33,7 @@ void TDMA_FDD_up_top_measure(void);
 void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte, unsigned char protocol, unsigned int RX_time);
 
 void TDMA_slave_timeout (void);
+void TDMA_get_slave_slot(unsigned int* alloc_age, unsigned char* multiframe_ID, unsigned char* multiframe_mask); // for the debug command
 
 void TDMA_master_allocation ();
 

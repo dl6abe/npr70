@@ -102,7 +102,7 @@ void W5500_write_byte(W5500_chip* SPI_p_loc, unsigned int W5500_addr, unsigned c
 void W5500_Phy_off_2sec(W5500_chip* SPI_p_loc) {
     //unsigned char phy_config[1];
     W5500_write_byte(SPI_p_loc, 0x002E, 0x00, 0x70);
-    wait(5);
+    ThisThread::sleep_for(5000);
     W5500_write_byte(SPI_p_loc, 0x002E, 0x00, 0xF8);
 }
 
@@ -155,6 +155,7 @@ void W5500_read_RX_buffer(W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* data,
  */
 uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* data, uint32_t len) {
 	uint32_t size = 0;
+	uint32_t packet_size;
 	uint8_t read_pointer_raw[2];
 	uint16_t read_pointer;
 	uint8_t W5_command[3];
@@ -169,8 +170,12 @@ uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* d
 	SPI_p_loc->spi_port->write((const char*) W5_command, 3, NULL, 0);
 	SPI_p_loc->spi_port->write(NULL, 0, (char*) data, 8); // Get the UDP header
 	size = data [7] + 256 * data[6];
-	if ( size > (len-8))
+	packet_size = size;
+	if (len < 8) {
+		size = 0;
+	} else if ( size > (len-8)) {
 		size = len-8; // Make sure we don't go past the size of `data`
+	}
 	SPI_p_loc->spi_port->write(NULL, 0, (char*) data+8, size); // Receive the payload of the UDP packet
 
 	size = size + 8;
@@ -179,7 +184,7 @@ uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* d
 	wait_us(2);
 	// printf ("size UDP:%d\r\n", size);
 
-	read_pointer = read_pointer + size ;		
+	read_pointer = read_pointer + packet_size + 8; // skip the whole packet, also the part that did not fit into `data`
 	read_pointer_raw[0] = read_pointer / 256;
 	read_pointer_raw[1] = read_pointer & 0xFF;
 	W5500_write_long(SPI_p_loc, W5500_Sn_RX_RD0, sock_nb, read_pointer_raw, 2);
@@ -188,10 +193,14 @@ uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* d
 }
 
 /**
- * Warning: no check that `data` is large enough for the data we're receiving
+ * Reads one frame of a MACRAW socket into `data`, which holds `max_size` bytes. The first two bytes
+ * are the length field of the chip (frame size + 2). Returns the size including these two bytes,
+ * or 0 if the frame is shorter than the length field or does not fit into `data`. A frame that
+ * is not returned is dropped: the read pointer of the chip moves past it either way.
  */
-int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data) {
+int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data, int max_size) {
 	int size=0;
+	int fits;
 	unsigned char read_pointer_raw[10];
 	unsigned short read_pointer;
 	uint8_t W5_command[3];
@@ -205,7 +214,13 @@ int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* 
 	SPI_p_loc->spi_port->write ((const char*) W5_command, 3, NULL, 0);
 	SPI_p_loc->spi_port->write (NULL, 0, (char*) data, 2);
 	size = data [1] + 256 * data[0];
-	SPI_p_loc->spi_port->write (NULL, 0, (char*) data+2, size-2);
+	if (size < 2) {
+		size = 2; // only the length field, nothing to read
+	}
+	fits = (size <= max_size);
+	if (fits && (size > 2)) {
+		SPI_p_loc->spi_port->write (NULL, 0, (char*) data+2, size-2);
+	}
 	
 	wait_us(1);
 	SPI_p_loc->cs->write(1);
@@ -217,6 +232,9 @@ int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* 
 	read_pointer_raw[1] = read_pointer & 0xFF;
 	W5500_write_long(SPI_p_loc, W5500_Sn_RX_RD0, sock_nb, read_pointer_raw, 2);
 	W5500_write_byte(SPI_p_loc, W5500_Sn_CR, sock_nb, 0x40);
+	if ( (!fits) || (size == 2) ) {
+		return 0;
+	}
 	return size; 
 }
 
@@ -241,9 +259,15 @@ static int W5500_configured = 0; 	// 0 not yet configured
 									// 1 configured
 									// 2 waiting reconfigure
 									// 3 waiting reboot after reconfigure
-void W5500_re_configure (void) {
+static unsigned int reconf_runs = 0;
+static unsigned char reconf_why = 0;
+static unsigned int reconf_last_s = 0;
+
+void W5500_re_configure (unsigned char why) {
 	W5500_configured = 2; 
-	
+	reconf_runs++;
+	reconf_why = why;
+	reconf_last_s = (unsigned int)time(NULL);
 }
 
 void W5500_re_configure_gateway(W5500_chip* SPI_p_loc) {
@@ -285,6 +309,108 @@ void W5500_re_configure_periodic_call(W5500_chip* SPI_p_loc) {
 	
 }
 
+// ---- PHY debug: link tracking, non blocking PHY reset (command 'phy') ----
+static unsigned char phy_last_phycfgr = 0;
+static unsigned int phy_link_changes = 0;
+static unsigned int phy_last_change_s = 0;
+static unsigned int phy_poll_last_us = 0;
+static int phy_reset_pending = 0;
+static unsigned int phy_reset_release_us = 0;
+static unsigned char phy_mode_now = 0xFF; // 0xFF = use CONF_Eth_mode
+
+// Self-heal: the PHY can stay in reset or powered down while the modem keeps running (link down, no LED).
+// Link down for PHY_HEAL_AFTER_US while no re-configure runs: reset the PHY (or release it if it is held in reset).
+// A re-configure that does not finish within RECONF_STUCK_US is forced to its end.
+#define PHY_HEAL_AFTER_US 30000000
+#define RECONF_STUCK_US 15000000
+static unsigned int phy_heal_count = 0;
+static unsigned int phy_heal_last_s = 0;
+static int phy_link_down = 0;
+static unsigned int phy_down_since_us = 0;
+static unsigned int phy_heal_next_us = 0;
+static int reconf_active = 0;
+static unsigned int reconf_since_us = 0;
+
+void W5500_link_poll(W5500_chip* SPI_p_loc) {
+	unsigned int now = GLOBAL_timer.read_us();
+	unsigned char mode = (phy_mode_now == 0xFF) ? CONF_Eth_mode : phy_mode_now;
+	unsigned char v;
+	if (phy_reset_pending && ((int)(now - phy_reset_release_us) >= 0)) {
+		W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (mode << 3) + 0xC0); // release the reset
+		phy_reset_pending = 0;
+	}
+	if ((now - phy_poll_last_us) < 20000) { // at most every 20 ms
+		return;
+	}
+	phy_poll_last_us = now;
+	v = W5500_read_byte(SPI_p_loc, 0x002E, W5500_Common_register_block);
+	if ((v & 0x01) != (phy_last_phycfgr & 0x01)) {
+		phy_link_changes++;
+		phy_last_change_s = (unsigned int)time(NULL);
+	}
+	phy_last_phycfgr = v;
+
+	if (v & 0x01) {
+		phy_link_down = 0;
+	} else if (!phy_link_down) {
+		phy_link_down = 1;
+		phy_down_since_us = now;
+		phy_heal_next_us = now + PHY_HEAL_AFTER_US;
+	}
+
+	if ((W5500_configured >= 2) && (W5500_configured <= 4)) {
+		if (!reconf_active) {
+			reconf_active = 1;
+			reconf_since_us = now;
+		} else if ((int)(now - reconf_since_us) >= RECONF_STUCK_US) {
+			W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (mode << 3) + 0xC0);
+			W5500_configured = 1;
+			reconf_active = 0;
+			phy_heal_count++;
+			phy_heal_last_s = (unsigned int)time(NULL);
+			if (phy_heal_count <= 10) {printf("\r\nPHY heal: re-configure was stuck, forced to end\r\n");}
+		}
+	} else {
+		reconf_active = 0;
+	}
+
+	if (phy_link_down && (W5500_configured == 1) && !phy_reset_pending && ((int)(now - phy_heal_next_us) >= 0)) {
+		phy_heal_next_us = now + PHY_HEAL_AFTER_US;
+		phy_heal_count++;
+		phy_heal_last_s = (unsigned int)time(NULL);
+		if (!(v & 0x80)) { // RST bit low: the PHY is held in reset
+			W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (mode << 3) + 0xC0);
+			if (phy_heal_count <= 10) {printf("\r\nPHY heal: PHY was held in reset, released\r\n");}
+		} else {
+			W5500_phy_reset_start();
+			if (phy_heal_count <= 10) {printf("\r\nPHY heal: link down, PHY reset\r\n");}
+		}
+	}
+}
+
+unsigned char W5500_link_phycfgr(void) { return phy_last_phycfgr; }
+int W5500_reconf_state(void) { return W5500_configured; }
+unsigned int W5500_reconf_runs(void) { return reconf_runs; }
+unsigned char W5500_reconf_why(void) { return reconf_why; }
+unsigned int W5500_reconf_last_s(void) { return reconf_last_s; }
+unsigned int W5500_heal_count(void) { return phy_heal_count; }
+unsigned int W5500_heal_last_s(void) { return phy_heal_last_s; }
+unsigned int W5500_link_down_s(void) { return phy_link_down ? (unsigned int)((GLOBAL_timer.read_us() - phy_down_since_us) / 1000000) : 0; }
+unsigned int W5500_link_changes(void) { return phy_link_changes; }
+unsigned int W5500_link_last_change_s(void) { return phy_last_change_s; }
+
+void W5500_phy_reset_start(void) {
+	unsigned char mode = (phy_mode_now == 0xFF) ? CONF_Eth_mode : phy_mode_now;
+	W5500_write_byte(W5500_p1, 0x002E, W5500_Common_register_block, (mode << 3) + 0x40); // RST bit low: PHY in reset
+	phy_reset_release_us = GLOBAL_timer.read_us() + 300000;
+	phy_reset_pending = 1;
+}
+
+void W5500_phy_set_mode(W5500_chip* SPI_p_loc, unsigned char mode) {
+	phy_mode_now = mode;
+	W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (mode << 3) + 0xC0);
+}
+
 /**
  * Does all the low level configuration of the ethernet chip, and opens the
  * necessary TCP/IP and UDP sockets for the services that are running on the modem
@@ -292,15 +418,13 @@ void W5500_re_configure_periodic_call(W5500_chip* SPI_p_loc) {
 void W5500_initial_configure(W5500_chip* SPI_p_loc) {
     // reset
     W5500_write_byte(SPI_p_loc, 0x0000, W5500_Common_register_block, 0x80);//0x90
-	wait_ms(500);
+	ThisThread::sleep_for(500);
 	W5500_write_byte(SPI_p_loc, 0x0000, W5500_Common_register_block, 0x00);//0x10
-	//wait_ms(1600);
 	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC8);
 	W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (CONF_Eth_mode << 3) + 0x40);//48 78 for 10MB full duplex / 40 half duplex !!!
-	wait_ms(1600);
+	ThisThread::sleep_for(1600);
 	W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (CONF_Eth_mode << 3) + 0xC0);//c8 F8 for 10MB full duplex / c0 half duplexc8 !!!
 	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC8);
-	//wait_ms(1600);
     
 	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC0);
     
@@ -348,12 +472,12 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	// Socket 0 MAC RAW for packet switching
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, RAW_SOCKET, 0x34); //config B4 for classic
 	W5500_write_byte(SPI_p_loc, W5500_Sn_IMR, RAW_SOCKET, 0x04); //Interrupt mask : RECV
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	W5500_write_byte(SPI_p_loc, W5500_Sn_CR, RAW_SOCKET, 0x01); //open
 	
     // Socket 1 telnet 
     W5500_write_byte(SPI_p_loc, W5500_Sn_MR, TELNET_SOCKET, 0x01); //config
-    wait_ms(10);
+    ThisThread::sleep_for(10);
     data[0]=0x00; //port 0d23
     data[1]=0x17;
     W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, TELNET_SOCKET, data, 2); //port 23 (0x17)
@@ -361,7 +485,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	
 	// Socket 2 RTP port 1519
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, RTP_SOCKET, 0x42); //config
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	data[0]=0x05; //port 0d1519
     data[1]=0xEF;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, RTP_SOCKET, data, 2); //port rx 1519 
@@ -377,7 +501,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	
 	// Socket 3 DHCP server
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, DHCP_SOCKET, 0x02); //config
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	data[0]=0x00; //port 0d67
     data[1]=0x43;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, DHCP_SOCKET, data, 2); //port rx 67 
@@ -396,7 +520,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	
 	// Socket 4 UDP_FDD
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, FDD_SOCKET, 0x42); //config
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	data[0]=0x1A; //port TX 0d6716 = 0x1A3E
     data[1]=0x3E;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, FDD_SOCKET, data, 2);
@@ -409,7 +533,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 
 	// Socket 5 SNMP Agent
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, SNMP_SOCKET, 0x02); //config
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	data[0]=0x00; //port 161
     data[1]=0xa1;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, SNMP_SOCKET, data, 2); //port rx 161

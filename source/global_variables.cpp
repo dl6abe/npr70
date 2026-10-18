@@ -129,6 +129,18 @@ unsigned char G_reset_reason = 0;
 #define FW_BUILD_ID "unknown"
 #endif
 const char FW_VERSION_ID[] = FW_BUILD_ID;
+// mbed-os version: mbed.h of 5.7 and later defines MBED_MAJOR_VERSION, MBED_MINOR_VERSION and
+// MBED_PATCH_VERSION, so the string always names the library that was really compiled in.
+// mbed.h of 5.6.6 has no such macros, there the Makefile passes NPR_MBED_OS_VERSION.
+#define NPR_STR_(x) #x
+#define NPR_STR(x) NPR_STR_(x)
+#if defined(MBED_MAJOR_VERSION) && defined(MBED_MINOR_VERSION) && defined(MBED_PATCH_VERSION)
+const char MBED_OS_VERSION_ID[] = NPR_STR(MBED_MAJOR_VERSION) "." NPR_STR(MBED_MINOR_VERSION) "." NPR_STR(MBED_PATCH_VERSION);
+#elif defined(NPR_MBED_OS_VERSION)
+const char MBED_OS_VERSION_ID[] = NPR_MBED_OS_VERSION;
+#else
+const char MBED_OS_VERSION_ID[] = "unknown";
+#endif
 int G_need_temperature_check = 0;
 unsigned long int CONF_radio_IP_size_requested;
 unsigned char CONF_radio_static_IP_requested;
@@ -148,6 +160,9 @@ unsigned int G_rx_fec_ok = 0;
 unsigned int G_rx_fec_fixed = 0;
 unsigned int G_rx_fec_lost = 0;
 unsigned int G_rx_seg_gap = 0;
+unsigned int G_eth_tx_ok = 0;
+unsigned int G_eth_tx_wait = 0;
+unsigned int G_radio_unrouted = 0;
 unsigned int G_rx_fec_client_ok[radio_addr_table_size];
 unsigned int G_rx_fec_client_fixed[radio_addr_table_size];
 unsigned int G_rx_fec_client_lost[radio_addr_table_size]; 

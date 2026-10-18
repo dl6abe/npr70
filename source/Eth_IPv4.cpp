@@ -27,7 +27,7 @@ static int temp_Eth_buff_size = 0;
 
 unsigned long int IP_char2int(unsigned char* IP_char) {
 	unsigned long int result;
-	result = 0x1000000*IP_char[0] + 0x10000*IP_char[1] + 0x100*IP_char[2] + IP_char[3];
+	result = (0x1000000UL*IP_char[0]) + (0x10000UL*IP_char[1]) + (0x100UL*IP_char[2]) + IP_char[3]; // unsigned, a first byte of 128 or more overflows int
 	return result;
 }
 
@@ -75,7 +75,7 @@ int Eth_RX_dequeue (W5500_chip* W5500) {
 		if (RX_size > 0) {
 			answer=1;
 
-			mac_size = W5500_read_MAC_pckt(W5500, RAW_SOCKET, RX_data);
+			mac_size = W5500_read_MAC_pckt(W5500, RAW_SOCKET, RX_data, sizeof(RX_data)); // 0 if the frame is invalid or too large
 			if (RX_size > mac_size) {
 				more_to_read = 1;
 			} else {
@@ -96,7 +96,8 @@ int Eth_RX_dequeue (W5500_chip* W5500) {
 			//	W5500_write_TX_buffer(W5500, RTP_SOCKET, RX_data+44, mac_size-44, 0);
 			//} 
 			
-			ethertype = RX_data[14]*0x100 + RX_data[15];
+			// mac_size is 0 for an invalid or too large frame, 16 bytes cover the length field and the Ethernet header
+			ethertype = (mac_size >= 16) ? (RX_data[14]*0x100 + RX_data[15]) : 0;
 			
 			if (ethertype == 0x0806) { //ARP packet received
 				//printf("ARP packet received!\r\n");
@@ -105,11 +106,11 @@ int Eth_RX_dequeue (W5500_chip* W5500) {
 				}
 			}
 			
-			if (ethertype == 0x0800) { // IPv4 packet
+			if ( (ethertype == 0x0800) && (mac_size >= 36) ) { // IPv4 packet, 36 bytes cover the length field, the Ethernet header and the IP header
 				RX_port = 0;
 				RX_proto = 0;
 				RX_dest_IP = 0;
-				if ( (is_TDMA_master) && (CONF_master_FDD == 1) ) {//master down
+				if ( (is_TDMA_master) && (CONF_master_FDD == 1) && (mac_size >= 44) ) {//master down, the UDP data starts at byte 44
 					//RX_Eth_pckt = RX_data+2;
 					RX_port = (RX_data[38] << 8) + RX_data[39];
 					RX_proto = RX_data[25];//11 for UDP
@@ -210,9 +211,15 @@ void IPv4_from_radio (unsigned char* RX_eth_frame, int RX_size) { //Rx size incl
 	//dest_IP_addr = IP_char2int(RX_radio_frame+16)
 	int eth_TX_need = 0; 
 	int radio_tx_need = 0;
+	if (RX_size < 34) { // Ethernet header (14) and IP header (20), the fields below are read up to byte 33
+		return;
+	}
 	dest_IP_addr = IP_char2int(RX_eth_frame + 30); 
 	
 	local_size = 0x100*RX_eth_frame[16] + RX_eth_frame[17];
+	if ( (local_size + 14) > RX_size ) { // the IP header claims more bytes than were received: lost segment or damaged packet
+		return;
+	}
 	//printf("size IPv4 : %i\r\n", local_size);
 	
 	//printf (" IPv4 radio RX\r\n");
@@ -260,9 +267,10 @@ void IPv4_from_radio (unsigned char* RX_eth_frame, int RX_size) { //Rx size incl
 		dest_MAC_found = lookfor_MAC_from_IP (RX_eth_frame, LAN_dest_IP);
 		if (dest_MAC_found) {		
 			W5500_write_TX_buffer(W5500_p1, RAW_SOCKET, RX_eth_frame, local_size + 14, 0); 
-			//RX_radio_IPv4_counter++;
+			G_eth_tx_ok++;
 		}
 		else {
+			G_eth_tx_wait++;
 			temp_Eth_buff_IP = LAN_dest_IP;
 			temp_Eth_buff_size = local_size + 14;
 			memcpy (temp_Eth_buffer, RX_eth_frame, temp_Eth_buff_size); 
@@ -273,6 +281,9 @@ void IPv4_from_radio (unsigned char* RX_eth_frame, int RX_size) { //Rx size incl
 		segment_and_push(RX_eth_frame + 14, local_size, loc_client_ID, 0x02); //0x02 is IPv4 access protocol
 		//TX_radio_IPv4_counter++;
 	}
+	if ( (eth_TX_need == 0) && (radio_tx_need == 0) ) {
+		G_radio_unrouted++;
+	}
 }
 
 void flush_temp_Eth_buffer(unsigned long int loc_IP) {
@@ -280,7 +291,7 @@ void flush_temp_Eth_buffer(unsigned long int loc_IP) {
 		if (loc_IP == temp_Eth_buff_IP) {
 			lookfor_MAC_from_IP (temp_Eth_buffer, loc_IP); //puts MAC inside Eth
 			W5500_write_TX_buffer(W5500_p1, RAW_SOCKET, temp_Eth_buffer, temp_Eth_buff_size, 0); 
-			//RX_radio_IPv4_counter++;
+			G_eth_tx_ok++;
 		}
 		temp_Eth_buff_size = 0;
 	}

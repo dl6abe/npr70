@@ -336,14 +336,14 @@ int SI4463_configure_from_h(SI4463_Chip* SI4463, unsigned char* radio_config_dat
 		i = i + current_command_length;
 		//
 	} while ( (current_command_length > 0) && (answer == 1) );
-	wait_ms(5);
+	ThisThread::sleep_for(5);
 	
 	// specific GLOBAL_CONFIG : SEQUENCER_MODE=GUARANTEED and FIFO_MODE=FIFO_129
 	unsigned char radio_config_bis[10] = {0x11, 0x00, 0x01, 0x03, 0x10}; 
 	SI4463_send_command(SI4463, radio_config_bis, 5);
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 800);//200
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);//50
+	ThisThread::sleep_for(5);//50
 	
 	// specific Max size field 2 
 	unsigned char radio_config_ter[10] = {0x11, 0x12, 0x02, 0x11, 0x00, 0xFF}; 
@@ -352,7 +352,7 @@ int SI4463_configure_from_h(SI4463_Chip* SI4463, unsigned char* radio_config_dat
 	SI4463_send_command(SI4463, radio_config_ter, 6);
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 800);
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);//50
+	ThisThread::sleep_for(5);//50
 	
 	//specific FIFO Threshold
 	unsigned char radio_config_quart[10] = {0x11, 0x12, 0x02, 0x0B, 0x30, 0x64}; 
@@ -361,7 +361,7 @@ int SI4463_configure_from_h(SI4463_Chip* SI4463, unsigned char* radio_config_dat
 	SI4463_send_command(SI4463, radio_config_quart, 6);
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 800);
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);//50
+	ThisThread::sleep_for(5);//50
 	
 	//specific SYNC WORD depending on 'radio network ID'
 	unsigned char hash_netID[20] = {0x33, 0x36, 0x39, 0x3c, 0x63, 0x66, 0x69, 0x6c, 0x93, 0x96, 0x99, 0x9c, 0xc3, 0xc6, 0xc9, 0xcc};
@@ -371,7 +371,7 @@ int SI4463_configure_from_h(SI4463_Chip* SI4463, unsigned char* radio_config_dat
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 800);
 	answer_loc = 1;
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);//5
+	ThisThread::sleep_for(5);//5
 	
 	//specific power 
 	unsigned char radio_config_sixt[10] = {0x11, 0x22, 0x01, 0x01, 0x7F}; 
@@ -379,7 +379,7 @@ int SI4463_configure_from_h(SI4463_Chip* SI4463, unsigned char* radio_config_dat
 	SI4463_send_command(SI4463, radio_config_sixt, 5);
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 800);
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);//5
+	ThisThread::sleep_for(5);//5
 	
 	return answer;
 }
@@ -391,7 +391,7 @@ int SI4463_set_power(SI4463_Chip* SI4463) {
 	SI4463_send_command(SI4463, radio_config_sixt, 5);
 	answer_loc = SI4463_CTS_read_answer(SI4463, SI_trash, 0, 200);
 	if (answer_loc == 0) {answer = 0;}
-	wait_ms(5);
+	ThisThread::sleep_for(5);
 	return answer;
 }
 
@@ -535,7 +535,6 @@ int SI4463_read_temperature(SI4463_Chip* SI4463) {
 	unsigned char answer_loc [10];
 	unsigned char command_temp_read[10] = {0x14, 0x10, 0xA0};
 	SI4463_send_command(SI4463, command_temp_read, 3);
-	//wait_ms(2);
 	wait_us(20);
 	if (SI4463_CTS_read_answer(SI4463, answer_loc, 6, 2000) ) {
 		temperature = answer_loc[4] * 256 + answer_loc[5];
@@ -1148,11 +1147,11 @@ int SI4463_configure_all(void) {
 	int answer_loc = 0;
 	int i = 0;
 	G_SI4463->SDN->write(0);
-	wait_ms(10);//100
+	ThisThread::sleep_for(10);//100
 	G_SI4463->SDN->write(1);
-	wait_ms(500);//100 20
+	ThisThread::sleep_for(500);//100 20
 	G_SI4463->SDN->write(0);
-	wait_ms(200);//500 20
+	ThisThread::sleep_for(200);//500 20
 	while ( (answer_loc == 0) && (i < 5) ) {
 		i++; 
 		//if (CONF_radio_modulation == 10) {
@@ -1194,10 +1193,9 @@ int SI4463_configure_all(void) {
 void SI4463_radio_start(void) {
 	if (CONF_radio_state_ON_OFF == 0) {
 		//SI4463_change_state(G_SI4463, 0x03);//change state to ready
-		wait_ms(1);
+		ThisThread::sleep_for(1);
 		G_SI4463->RX_TX_state = 0;
 		SI4463_clear_IT(G_SI4463, 0, 0);
-		//wait_ms(10);
 		SI4463_CTS_read_answer (G_SI4463, SI_trash, 0, 600);
 		CONF_radio_state_ON_OFF = 1;
 		if ( (is_TDMA_master) && (CONF_master_FDD < 2) ) {
@@ -1211,7 +1209,7 @@ void SI4463_radio_start(void) {
 
 void RADIO_on(int need_disconnect, int need_radio_reconfigure, int HMI_output) {
 	last_rframe_seen = GLOBAL_timer.read_us();
-	wait_ms(50);//10
+	ThisThread::sleep_for(50);//10
 	if (need_radio_reconfigure == 1) {
 		if (HMI_output) { HMI_printf("reconfiguring radio...\r\n"); }
 		SI4463_configure_all();
@@ -1241,7 +1239,7 @@ void RADIO_off(int need_disconnect) {
 		my_client_radio_connexion_state = 1;
 		my_radio_client_ID = 0x7E;
 	}
-	wait_ms(100);//400
+	ThisThread::sleep_for(100);//400
 	SI4463_FIFO_status(G_SI4463, &toto, &toto, 1);//tentative 
 	G_SI4463->RX_TX_state = 0;//tentative 
 	G_SI4463->RX_LED->write(0); 
@@ -1251,7 +1249,7 @@ void RADIO_off(int need_disconnect) {
 	SI4463_FIFO_status(G_SI4463, &toto, &toto, 1);//tentative 
 	wait_us(10);
 	SI4463_clear_IT (G_SI4463, 0, 0);//tentative 
-	wait_ms(10);
+	ThisThread::sleep_for(10);
 	RX_FIFO_WR_point = RX_FIFO_last_received; //rewind FIFO pointer
 	G_PTT_PA_pin->write(0);
 	TX_in_progress = 0;
@@ -1297,12 +1295,12 @@ void SI4432_TX_test(unsigned int req_duration) { //duration in ms
 	SI4463_TX_new_frame(0);
 	timer_begin = GLOBAL_timer.read_us();
 	do {
-		wait_ms(2);
+		ThisThread::sleep_for(2);
 		timer_snapshot = GLOBAL_timer.read_us();
 		real_duration = (timer_snapshot - timer_begin);
 	} while (real_duration < (req_duration) ) ;
 	TX_test_inprogress = 0;
-	wait_ms(200);
+	ThisThread::sleep_for(200);
 	RADIO_off(1);
 }
 
@@ -1331,9 +1329,9 @@ void SI4463_set_frequency(float freq_base, float freq_step) {
 	//	printf("i%i : %02X\r\n", i, radio_config[i]);
 	//}
 	SI4463_send_command(G_SI4463, radio_config, 10);
-	wait_ms(100);// 100us
+	ThisThread::sleep_for(100);// 100us
 	SI4463_CTS_read_answer(G_SI4463, SI_trash, 0, 200);
-	wait_ms(100);// 100us
+	ThisThread::sleep_for(100);// 100us
 }
 
 void RADIO_compute_freq_params() {

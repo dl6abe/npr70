@@ -170,6 +170,12 @@ void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte,
 	}
 }
 
+void TDMA_get_slave_slot(unsigned int* alloc_age, unsigned char* multiframe_ID, unsigned char* multiframe_mask) {
+	*alloc_age = slave_alloc_RX_age;
+	*multiframe_ID = my_multiframe_ID;
+	*multiframe_mask = my_multiframe_mask;
+}
+
 //TDMA_slave_timeout : allow 1 more burst if no TOP received from Master
 void TDMA_slave_timeout (void) {
 	unsigned int loc_time;
@@ -403,7 +409,7 @@ void TDMA_NULL_frame_init(int size) {
 	unsigned char null_frame[260];
 	int size_wo_FEC, size_w_FEC; 
 	unsigned char rframe_length;
-	null_frame[0] = my_radio_client_ID + parity_bit_elab[my_radio_client_ID]; // address = client
+	null_frame[0] = my_radio_client_ID + parity_bit_elab[my_radio_client_ID & 0x7F]; // address = client, the ID is 0x7E or 0xFE before the connection
 	null_frame[1] = 0x00; // protocol = NULL frame
 	//size_wo_FEC = 70;
 	size_wo_FEC = size;
@@ -422,7 +428,7 @@ void TDMA_NULL_frame_init(int size) {
 
 
 void TDMA_slave_alloc_exploitation(unsigned char* unFECdata, int unFECsize) {
-	static unsigned char LUT_multif_mask[8] = {0,1,3,7,15,31};
+	static unsigned char LUT_multif_mask[16] = {0,1,3,7,15,31}; // index is a 4 bit field from the master, values 6 to 15 are not defined and give 0
 	int i;
 	unsigned char loc_client_ID;
 	unsigned char loc_TDMA_slot_length;

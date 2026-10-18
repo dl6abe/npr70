@@ -126,7 +126,7 @@ void radio_RX_FIFO_dequeue (W5500_chip* W5500) {
 			TA_local = TDMA_TA_measure_single_frame(frame_timer, TDMA_byte, client_ID_byte, size_w_FEC);
 			if ( (timer_snapshot-last_rframe_seen) > (CONF_radio_timeout+1000000) ) {
 				last_rframe_seen = timer_snapshot;
-				wait_ms(20);//lets time for client to switch to RX
+				ThisThread::sleep_for(20);//lets time for client to switch to RX
 				SI4463_prepa_TX_1();
 			}
 		}
@@ -208,7 +208,8 @@ void radio_RX_FIFO_dequeue (W5500_chip* W5500) {
 						size_received[LID] = segment_size;
 						//printf("1st seg\r\n");
 					} 
-					else if ( (seg_counter == (prev_seg_counter[LID] + 1)) && (pkt_counter == curr_pkt_counter[LID]) ) {
+					else if ( (seg_counter == (prev_seg_counter[LID] + 1)) && (pkt_counter == curr_pkt_counter[LID])
+						&& ( (size_received[LID] + segment_size) <= (int)(sizeof(ethernet_buffer[0]) - 14) ) ) { // else the packet does not fit, drop it
 						//folowing segment
 						memcpy ( (ethernet_buffer[LID] + size_received[LID] +14), data_RX+3, segment_size);
 						size_received[LID] = size_received[LID] + segment_size;
@@ -406,6 +407,8 @@ void segment_and_push (unsigned char* data_unsegmented, int total_size, unsigned
 	int size_remaining;
 	int segment_size; 
 	int size_to_send;
+	int size_copy;
+	int size_real = (total_size > 0) ? total_size : 0; // bytes that exist in data_unsegmented
 	unsigned char data_wo_FEC[300];
 #ifdef EXT_SRAM_USAGE
 	unsigned char radio_pckt[360];
@@ -453,7 +456,12 @@ void segment_and_push (unsigned char* data_unsegmented, int total_size, unsigned
 				data_wo_FEC[0] = client_addr + parity_bit_elab[(client_addr&0x7F)]; //client address
 				data_wo_FEC[1] = protocol; //protocol : raw ethernet
 				data_wo_FEC[2] = segmenter_byte; // segmenter byte
-				memcpy(data_wo_FEC+3, (data_unsegmented + size_sent), size_to_send); 
+				// copy only the bytes that exist in the source, the rest of a short segment is zero
+				size_copy = size_real - size_sent;
+				if (size_copy > size_to_send) { size_copy = size_to_send; }
+				if (size_copy < 0) { size_copy = 0; }
+				memcpy(data_wo_FEC+3, (data_unsegmented + size_sent), size_copy); 
+				memset(data_wo_FEC+3+size_copy, 0, size_to_send - size_copy);
 				size_sent = size_sent + size_to_send;
 				size_w_FEC = FEC_encode2(data_wo_FEC, rframe_TX+3, size_wo_FEC); 
 				TX_FIFO_write_global(rframe_TX, size_w_FEC+3);//3 for timer & length & TDMA_byte

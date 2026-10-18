@@ -47,8 +47,11 @@ extern ext_SRAM_chip* SPI_SRAM_p;
 // Set by the Makefile: YYMMDD and the build hour as a letter (A = 00 ... X = 23)
 extern const char FW_VERSION_ID[];
 #define FW_VERSION FW_VERSION_ID
-// The start message and the version command print these two lines in the same way
-#define FW_BANNER_FORMAT "NPR FW %s\r\nreset reason: %s\r\n"
+// Version of the mbed-os the firmware was built with (from mbed.h, see global_variables.cpp)
+extern const char MBED_OS_VERSION_ID[];
+#define MBED_OS_VERSION MBED_OS_VERSION_ID
+// The start message and the version command print these three lines in the same way
+#define FW_BANNER_FORMAT "NPR FW %s\r\nmbed-os %s\r\nreset reason: %s\r\n"
 
 extern SI4463_Chip* G_SI4463;
 
@@ -208,6 +211,9 @@ extern unsigned int G_rx_fec_ok;     // every block passed its check
 extern unsigned int G_rx_fec_fixed;  // one block failed and was rebuilt from the other three
 extern unsigned int G_rx_fec_lost;   // two or more blocks failed, frame dropped
 extern unsigned int G_rx_seg_gap;    // a segment of an IP packet was missing, packet dropped
+extern unsigned int G_eth_tx_ok;     // IPv4 frames from the radio written to the Ethernet side
+extern unsigned int G_eth_tx_wait;   // IPv4 frames from the radio held back until the MAC of the destination is known
+extern unsigned int G_radio_unrouted; // IPv4 packets from the radio that have no destination (not sent anywhere)
 // the same per client, counted on the master for the frames it receives from the clients
 extern unsigned int G_rx_fec_client_ok[radio_addr_table_size];
 extern unsigned int G_rx_fec_client_fixed[radio_addr_table_size];

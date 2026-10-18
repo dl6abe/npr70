@@ -90,7 +90,6 @@ unsigned int virt_EEPROM_write(npr_config* in_data, unsigned int previous_index)
 //		loc_address = NFPR_config_addr_begin + (i & 0x3F)*256;
 //		my_loc_flash.read(loc_data, loc_address, 256);
 //		HMI_printf("addr:%X data:%02X %02X %02X %02X %02X %02X %02X %02X\r\n", loc_address, loc_data[0], loc_data[1], loc_data[2], loc_data[3], loc_data[4], loc_data[5], loc_data[6], loc_data[7]);
-//		wait_ms(10);
 //	}
 //	my_loc_flash.deinit();
 //}
@@ -134,7 +133,7 @@ unsigned char NFPR_random_generator(AnalogIn* analog_pin) {
 		interm_random = (interm_random & 0x10)>>4;
 		interm_random = (interm_random << i);
 		random_8 = random_8 + interm_random;
-		wait_ms(4);
+		ThisThread::sleep_for(4);
 	}
 	return random_8;
 }
@@ -228,6 +227,7 @@ void write_config_to_raw_string (npr_config* data_r) {
 	int i;
 	data_r->is_master = is_TDMA_master;
 	strncpy(data_r->callsign, CONF_radio_my_callsign, 15);
+	data_r->callsign[15] = 0;
 	data_r->telnet_last_active = is_telnet_active;
 	data_r->modulation = ( (CONF_frequency_band << 6) & 0xC0) + (CONF_radio_modulation & 0x3F);
 	data_r->frequency = CONF_radio_frequency;

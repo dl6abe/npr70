@@ -81,178 +81,251 @@ void DHCP_release (LAN_conf_T* LAN_config, unsigned char* client_MAC) {
 	
 }
 
+// Index of the DHCP table entry that holds this MAC (the last one if several), or 255.
+static int DHCP_find_entry_by_MAC(unsigned char* client_MAC) {
+	int i;
+	int found = 255;
+	for (i=0; i<DHCP_ARP_tab_size; i++) {
+		if ((compare_MAC( DHCP_ARP_MAC[i], client_MAC)) && (DHCP_ARP_status[i]))  {
+			found = i;
+		}
+	}
+	return found;
+}
+
+// 1 if no other entry than 'own_entry' has this IP allocated.
+static int DHCP_IP_is_free(unsigned long int IP, int own_entry) {
+	int i;
+	for (i=0; i<DHCP_ARP_tab_size; i++) {
+		if ( (DHCP_ARP_IP[i] == IP) && (DHCP_ARP_status[i]==2) && (i != own_entry) ) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+// Lowest IP of the DHCP range that is not allocated. Returns 0 if the range is full.
+static int DHCP_find_unused_IP(LAN_conf_T* LAN_config, unsigned long int* unused_IP) {
+	int i, j;
+	unsigned long int IP_tested;
+	int OK_loc;
+	int found_IP = 0;
+	for (i = (LAN_config->DHCP_range_size - 1); i>=0; i--) {
+		IP_tested = LAN_config->DHCP_range_start + i;
+		OK_loc=1;
+		for (j=0; j<DHCP_ARP_tab_size; j++) {
+			if ( (IP_tested == DHCP_ARP_IP[j]) && (DHCP_ARP_status[j]==2) ) { // a améliorer : trop simple
+				OK_loc = 0;
+			}
+		}
+		if (OK_loc == 1) {
+			*unused_IP = IP_tested;
+			found_IP = 1;
+		}
+	}
+	return found_IP;
+}
+
+// Store a new allocation in the lowest slot that is not allocated.
+static void DHCP_store_entry(unsigned char* client_MAC, unsigned char* IP, unsigned char status) {
+	int i;
+	int free_DHCP_slot=255;
+	for (i=DHCP_ARP_tab_size-1; i>=0; i--) {
+		if (DHCP_ARP_status[i]!=2) {
+			free_DHCP_slot = i;
+		}
+	}
+	if (free_DHCP_slot!=255) {
+		DHCP_ARP_status[free_DHCP_slot] = status;
+		if (status == 2) {DHCP_ARP_date[free_DHCP_slot] = GLOBAL_timer.read_us();}
+		DHCP_ARP_IP[free_DHCP_slot] = IP_char2int(IP);
+		for (i=0; i<6; i++) {
+			DHCP_ARP_MAC[free_DHCP_slot][i] = client_MAC[i];
+		}
+	}
+}
+
 int lookfor_free_LAN_IP (LAN_conf_T* LAN_config, unsigned char* client_MAC, unsigned char* requested_IP, unsigned char* proposed_IP, int req_type) {
 	//req type : like DHCP. 1:discover 3:request
 	int answer=0;
-	int i_previous_alloc = 255;
-	int match_previous_alloc = 0;
-	int i,j;
-	unsigned long int proposed_IP_int = 0xFFFFFFFF;
+	int i;
 	int new_alloc_entry = 0;
-	unsigned char new_status;
-	//unsigned long int requested_IP_int;
-	unsigned long int req_IP_int; 
-	
-	req_IP_int = IP_char2int (requested_IP); 
-		
+	unsigned char new_status = 0;
+	unsigned long int req_IP_int = IP_char2int (requested_IP);
+	unsigned long int unused_IP;
+
+	if (req_type == 1) { new_status = 1; }
+	if (req_type == 3) { new_status = 2; }
+
 	// 1) tests
 	// 1.1) lookfor client MAC in DHCP table
-	for (i=0; i<DHCP_ARP_tab_size; i++) {
-		if ((compare_MAC( DHCP_ARP_MAC[i], client_MAC)) && (DHCP_ARP_status[i]))  {
-			i_previous_alloc  = i;
+	int i_previous_alloc = DHCP_find_entry_by_MAC(client_MAC);
+	// 1.2) check if matches previous allocation
+	int match_previous_alloc = ( (i_previous_alloc!=255) && (DHCP_ARP_IP[i_previous_alloc] == req_IP_int) );
+	if (match_previous_alloc) {
+		// total match with previous allocation
+		answer = 1;
+		if (req_type==1) {
+			DHCP_ARP_status[i_previous_alloc] = 1;
 		}
-		//printf("MAC_comparison:%i %i\r\n", compare_MAC( LAN_config->DHCP_alloc_MAC[i], client_MAC), i);
-	}
-	//printf ("previous entry with same MAC: %i\r\n", i_previous_alloc);
-	// 1.2)check if matches previous allocation
-	if (i_previous_alloc!=255) {
-		if (DHCP_ARP_IP[i_previous_alloc] == req_IP_int) {
-			match_previous_alloc = 1;
-		} else {
-			match_previous_alloc = 0;
-		}
-		if (match_previous_alloc==1) {// matches previous allocation
-			// total match with previous allocation
-			answer = 1;
-			if (req_type==1) {
-				DHCP_ARP_status[i_previous_alloc] = 1;
-			}
-			if (req_type==3) {
-				DHCP_ARP_status[i_previous_alloc] = 2;
-				DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
-			}
-		} else {
-			//address requested different from previous allocation
-			
-		}
-		//printf ("req matches previous:%i\r\n", match_previous_alloc);
-		
-	}
-	// 1.3) check if requested IP agreed : inside range
-	int requ_IP_inside_range;
-	if ( (req_IP_int >= LAN_config->DHCP_range_start) && (req_IP_int < (LAN_config->DHCP_range_start + LAN_config->DHCP_range_size)) ) {
-		requ_IP_inside_range = 1;
-	} else {
-		requ_IP_inside_range = 0;
-	}
-	//printf("requested ip inside range:%i\r\n", requ_IP_inside_range);
-	// 1.4) chech if requested IP is free (not allocated to another MAC)
-	int req_IP_free = 1;
-	for (i=0; i<DHCP_ARP_tab_size; i++) {
-		if ( (DHCP_ARP_IP[i] == req_IP_int) && (DHCP_ARP_status[i]==2) && (i != i_previous_alloc) ) {
-			req_IP_free = 0;
+		if (req_type==3) {
+			DHCP_ARP_status[i_previous_alloc] = 2;
+			DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
 		}
 	}
-	// 1.5) synthesis
-	int req_IP_agreed;
-	if ( (requ_IP_inside_range == 1) && (req_IP_free == 1) ) {
-		req_IP_agreed = 1;
-	} else {
-		req_IP_agreed = 0;
-	}
+	// 1.3) check if requested IP agreed : inside range, and 1.4) free (not allocated to another MAC)
+	int requ_IP_inside_range = ( (req_IP_int >= LAN_config->DHCP_range_start) && (req_IP_int < (LAN_config->DHCP_range_start + LAN_config->DHCP_range_size)) );
+	int req_IP_agreed = ( requ_IP_inside_range && DHCP_IP_is_free(req_IP_int, i_previous_alloc) );
 	// 2.1) free previous DHCP entry
 	if ( (i_previous_alloc!=255) && (match_previous_alloc==0) && (req_IP_agreed==1) ) {
 		DHCP_ARP_status[i_previous_alloc] = 0;
 	}
 	// 2.2) look for unallocated IP
-	unsigned long int IP_tested;
-	int OK_loc;
-	int found_IP = 0;
 	if ( (req_type==1) && (req_IP_agreed==0) && (i_previous_alloc==255) ) {
-		for (i = (LAN_config->DHCP_range_size - 1); i>=0; i--) {
-			IP_tested = LAN_config->DHCP_range_start + i;
-			OK_loc=1;
-			for (j=0; j<DHCP_ARP_tab_size; j++) {
-				if ( (IP_tested == DHCP_ARP_IP[j]) && (DHCP_ARP_status[j]==2) ) { // a améliorer : trop simple
-					OK_loc = 0;
-				}
-			}
-			if (OK_loc == 1) {
-				proposed_IP_int = IP_tested;
-				found_IP = 1;
-			}
-		}
-		if (found_IP == 1) {
+		if (DHCP_find_unused_IP(LAN_config, &unused_IP)) {
 			new_alloc_entry = 1;
-			IP_int2char (proposed_IP_int,proposed_IP);
-			new_status = 1; 
+			IP_int2char (unused_IP, proposed_IP);
 			answer = 3;
 		}
-		//printf("case 2 new IP needed \r\n");
 	}
-	
 	// 2.3) anwser with previous allocation 
 	if ( (req_type == 1) && (req_IP_agreed==0) && (i_previous_alloc!=255) ) {
 		IP_int2char (DHCP_ARP_IP[i_previous_alloc], proposed_IP);
-		if (req_type == 1) { new_status = 1; }
-		if (req_type == 3) { 
-			new_status = 2; 
-			DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
-		}
-		DHCP_ARP_status [i_previous_alloc] = new_status;
+		DHCP_ARP_status [i_previous_alloc] = 1;
 		answer = 3;
-		//printf("case 3 answer with previous alloc\r\n");
 	}
-	
-	// 2.4) new IP agreed, but do match previous allocation
+	// 2.4) new IP agreed, but do not match previous allocation
 	if ( (i_previous_alloc!=255) && (match_previous_alloc==0) && (req_IP_agreed==1) ) {
 		for (i=0; i<4; i++) {
 			proposed_IP [i] = requested_IP[i]; 
 		}
 		new_alloc_entry = 1; 
-		if (req_type == 1) { new_status = 1; }
-		if (req_type == 3) { new_status = 2; }
 		answer = 1;
-		//printf("case 4 new IP ok, do not match previous\r\n");
 	}
-	
 	// 2.5) new IP agreed and matches previous allocation
 	if ( (i_previous_alloc!=255) && (match_previous_alloc==1) && (req_IP_agreed==1) ) {
 		for (i=0; i<4; i++) {
 			proposed_IP [i] = requested_IP[i]; 
 		}
-		if (req_type == 1) { new_status = 1; }
 		if (req_type == 3) { 
-			new_status = 2; 
 			DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
 		}
 		DHCP_ARP_status [i_previous_alloc] = new_status;
 		answer = 1;
-		//printf("case 5 IP requested match previous, and OK\r\n");
 	}
-	
 	// 2.6) new IP agreed, no previous allocation
 	if ( (i_previous_alloc==255) && (req_IP_agreed==1) ) {
 		for (i=0; i<4; i++) {
 			proposed_IP [i] = requested_IP[i]; 
 		}
 		new_alloc_entry = 1;
-		if (req_type == 1) { new_status = 1; }
-		if (req_type == 3) { new_status = 2; }
 		answer = 1;
-		//printf("case 6 IP requested ok, no previous alloc\r\n");
 	}
 
 	// new DHCP entry 
-	int free_DHCP_slot=255;
 	if (new_alloc_entry == 1) {
-		for (i=DHCP_ARP_tab_size-1; i>=0; i--) {
-			if (DHCP_ARP_status[i]!=2) {
-				free_DHCP_slot = i;
-			}
-			//printf("dhcp inside lookfor:%i stat:%i\r\n", i, LAN_config->DHCP_alloc_status[i]);
-		}
-		if (free_DHCP_slot!=255) {
-			DHCP_ARP_status[free_DHCP_slot] = new_status;
-			if (new_status == 2) {DHCP_ARP_date[free_DHCP_slot] = GLOBAL_timer.read_us();}
-			DHCP_ARP_IP[free_DHCP_slot] = IP_char2int(proposed_IP);
-			for (i=0; i<6; i++) {
-				DHCP_ARP_MAC[free_DHCP_slot][i] = client_MAC[i];
-			}
-			//printf("new DHCP entry OK, index %i status %i \r\n", free_DHCP_slot, new_status);
-		}
+		DHCP_store_entry(client_MAC, proposed_IP, new_status);
 	}
 	return answer;
+}
+
+// Reads MAC, session ID and requested IP from a DHCP request and returns the message type (option 53).
+static unsigned char DHCP_parse_request(unsigned char* RX_data, int size_UDP, unsigned char* client_MAC, unsigned char* session_ID, unsigned char* requested_IP) {
+	int i;
+	int option_pos;
+	unsigned char option_size;
+	unsigned char option_type;
+	unsigned char message_type_client = 0;
+	for (i=0; i<6; i++) {
+		client_MAC[i] = RX_data[i+36];
+	}
+	// session ID (XID)
+	for (i=0; i<4; i++) {
+		session_ID[i] = RX_data[i+12];
+	}
+	for (i=0; i<4; i++) {
+		requested_IP[i] = RX_data[i+20];
+	}
+	// DHCP option read
+	option_pos = 248;
+	do {
+		option_type = RX_data[option_pos];
+		option_size = RX_data[option_pos+1];
+		switch (option_type) {
+			case 53 : message_type_client = RX_data[option_pos+2]; break;
+			case 50 :
+				requested_IP[0] = RX_data[option_pos+2];
+				requested_IP[1] = RX_data[option_pos+3];
+				requested_IP[2] = RX_data[option_pos+4];
+				requested_IP[3] = RX_data[option_pos+5];
+				break;
+		} 
+		option_pos = option_pos + option_size + 2;
+	} while ((option_type != 255) && (option_pos < size_UDP));
+	return message_type_client;
+}
+
+// Fields of the answer that do not depend on the message type. The options start at index 240.
+static void DHCP_build_answer_header(unsigned char* DHCP_answer, unsigned char* session_ID, unsigned char* client_MAC) {
+	int i;
+	for (i=0; i<400; i++ )  {
+		DHCP_answer[i] = 0;
+	}
+	DHCP_answer[0] = 0x02;//answer
+	DHCP_answer[1] = 0x01;
+	DHCP_answer[2] = 0x06;
+	DHCP_answer[3] = 0x00;
+	for (i=0; i<4; i++) {// session ID
+		DHCP_answer[i+4] = session_ID[i];
+	}
+	for (i=0; i<6; i++) {// client MAC
+		DHCP_answer[i+28] = client_MAC[i];
+	}
+	DHCP_answer[236] = 0x63;//magic cookie
+	DHCP_answer[237] = 0x82;
+	DHCP_answer[238] = 0x53;
+	DHCP_answer[239] = 0x63;
+}
+
+static int DHCP_add_option_message_type(unsigned char* DHCP_answer, int pos, unsigned char message_type) {
+	DHCP_answer[pos]=53; // message type
+	DHCP_answer[pos+1]=1;
+	DHCP_answer[pos+2]=message_type;
+	return pos + 3;
+}
+
+static int DHCP_add_option_IP(unsigned char* DHCP_answer, int pos, unsigned char option, unsigned long int IP) {
+	DHCP_answer[pos]=option;
+	DHCP_answer[pos+1]=4;
+	IP_int2char (IP, DHCP_answer + pos + 2);
+	return pos + 6;
+}
+
+// Options of an OFFER (type 2) or an ACK (type 5). Returns the size of the answer.
+static int DHCP_build_lease_answer(LAN_conf_T* LAN_config, unsigned char* DHCP_answer, unsigned char* proposed_IP, unsigned char message_type) {
+	int i;
+	int pos = 240;
+	for (i=0; i<4; i++) { //proposed IP
+		DHCP_answer[i+16] = proposed_IP[i];
+	}
+	pos = DHCP_add_option_message_type(DHCP_answer, pos, message_type);
+	pos = DHCP_add_option_IP(DHCP_answer, pos, 1, LAN_config->LAN_subnet_mask);
+	if (LAN_config->LAN_def_route_activ == 1) {
+		pos = DHCP_add_option_IP(DHCP_answer, pos, 3, LAN_config->LAN_def_route);
+	}
+	if (LAN_config->LAN_DNS_activ == 1) {
+		pos = DHCP_add_option_IP(DHCP_answer, pos, 6, LAN_config->LAN_DNS_value);
+	}
+	DHCP_answer[pos]=51; //Lease Time
+	DHCP_answer[pos+1]=4;
+	DHCP_answer[pos+2]=0x00;
+	DHCP_answer[pos+3]=0x00;
+	DHCP_answer[pos+4]= (DHCP_ARP_timeout & 0xFF00) >> 8;
+	DHCP_answer[pos+5]= DHCP_ARP_timeout & 0xFF;
+	pos = pos + 6;
+	pos = DHCP_add_option_IP(DHCP_answer, pos, 54, LAN_config->LAN_modem_IP); // DHCP server IP
+	DHCP_answer[pos]=255;// end
+	return pos + 1;
 }
 
 /**
@@ -263,210 +336,40 @@ void DHCP_server(LAN_conf_T* LAN_config, W5500_chip* W5500 ) {
 	unsigned char client_MAC[7];
 	unsigned char session_ID[5];
 	unsigned char requested_IP[5]={0,0,0,0,0};
-	unsigned char DHCP_server_IP[5]={0,0,0,0,0};
-	int RX_size, size_UDP, i;
-	unsigned char message_type_client = 0;
-	unsigned char message_type_server;
-	int index_opt_answer=240;
+	int RX_size, size_UDP;
+	unsigned char message_type_client;
+	int answer_size;
 	static unsigned char DHCP_answer[400];
-	unsigned char proposed_IP[4];
+	unsigned char proposed_IP[4] = {0,0,0,0};
 	int loc_status;
-	
 	
 	RX_size = W5500_read_received_size(W5500, DHCP_SOCKET); 
 	if (RX_size>0) {
-		
-		size_UDP = W5500_read_UDP_pckt(W5500, DHCP_SOCKET, RX_data, 0);
+		size_UDP = W5500_read_UDP_pckt(W5500, DHCP_SOCKET, RX_data, sizeof(RX_data) - 8); // the parser reads up to 5 bytes behind the packet
 		if (RX_data[8]==1) { // Valid DHCP request
-			
-			// *** DHCP request decoding ***
-			// client mac address read
-			for (i=0; i<6; i++) {
-				client_MAC[i] = RX_data[i+36];
-				//printf("%x:", client_MAC[i]);
-			}
-			// session ID (XID)
-			for (i=0; i<4; i++) {
-				session_ID[i] = RX_data[i+12];
-				//printf("%x:", session_ID[i]);
-			}
-			for (i=0; i<4; i++) {
-				requested_IP[i] = RX_data[i+20];
-			}
-			//printf("\r\n");
-			//printf("\r\nDHCP from client RXs:%d UDPs:%d\r\n", RX_size, size_UDP);
-			// DHCP option read
-			int option_pos;
-			unsigned char option_size;
-			unsigned char option_type;
-			option_pos = 248;
-			do {
-				option_type = RX_data[option_pos];
-				option_size = RX_data[option_pos+1];
-				//printf("option:%d\r\n",option_type);
-				
-				switch (option_type) {
-					case 53 : message_type_client = RX_data[option_pos+2]; break;
-					case 50 :
-						requested_IP[0] = RX_data[option_pos+2];
-						requested_IP[1] = RX_data[option_pos+3];
-						requested_IP[2] = RX_data[option_pos+4];
-						requested_IP[3] = RX_data[option_pos+5];
-						break;
-					case 54 : 
-						DHCP_server_IP[0] = RX_data[option_pos+2];
-						DHCP_server_IP[1] = RX_data[option_pos+3];
-						DHCP_server_IP[2] = RX_data[option_pos+4];
-						DHCP_server_IP[3] = RX_data[option_pos+5];
-						break;
-				} 
-				option_pos = option_pos + option_size + 2;
-			} while ((option_type != 255) && (option_pos < size_UDP));
-			
-			// independant DHCP answer fields
-			for (i=0; i<400; i++ )  {
-				DHCP_answer[i] = 0;
-			}
-			DHCP_answer[0] = 0x02;//answer
-			DHCP_answer[1] = 0x01;
-			DHCP_answer[2] = 0x06;
-			DHCP_answer[3] = 0x00;
-			for (i=0; i<4; i++) {// session ID
-				DHCP_answer[i+4] = session_ID[i];
-			}
-			for (i=0; i<6; i++) {// client MAC
-				DHCP_answer[i+28] = client_MAC[i];
-			}
-			DHCP_answer[236] = 0x63;//magic cookie
-			DHCP_answer[237] = 0x82;
-			DHCP_answer[238] = 0x53;
-			DHCP_answer[239] = 0x63;
+			message_type_client = DHCP_parse_request(RX_data, size_UDP, client_MAC, session_ID, requested_IP);
+			DHCP_build_answer_header(DHCP_answer, session_ID, client_MAC);
 			
 			// decision
 			loc_status = lookfor_free_LAN_IP (LAN_config, client_MAC, requested_IP, proposed_IP, message_type_client);
 			
 			if (message_type_client == 1) { // discover -> offer
-				
-				for (i=0; i<4; i++) { //proposed IP
-					DHCP_answer[i+16] = proposed_IP[i];
-				}
-				
-				message_type_server = 2;
-				DHCP_answer[index_opt_answer]=53; // message type
-				DHCP_answer[index_opt_answer+1]=1;
-				DHCP_answer[index_opt_answer+2]=message_type_server;
-				index_opt_answer = index_opt_answer +3;
-				DHCP_answer[index_opt_answer]=1; // subnet mask
-				DHCP_answer[index_opt_answer+1]=4;
-				IP_int2char (LAN_config->LAN_subnet_mask, (DHCP_answer + index_opt_answer + 2) );
-				index_opt_answer = index_opt_answer +6;
-				if (LAN_config->LAN_def_route_activ == 1) {
-					DHCP_answer[index_opt_answer]=3; // default route
-					DHCP_answer[index_opt_answer+1]=4;
-
-					IP_int2char (LAN_config->LAN_def_route, (DHCP_answer + index_opt_answer + 2) );
-					index_opt_answer = index_opt_answer +6;
-				}
-				if (LAN_config->LAN_DNS_activ == 1) {
-					DHCP_answer[index_opt_answer]=6; // DNS server
-					DHCP_answer[index_opt_answer+1]=4;
-
-					IP_int2char (LAN_config->LAN_DNS_value, (DHCP_answer + index_opt_answer + 2) );
-					index_opt_answer = index_opt_answer +6;
-				}
-				DHCP_answer[index_opt_answer]=51; //Lease Time
-				DHCP_answer[index_opt_answer+1]=4;
-				DHCP_answer[index_opt_answer+2]=0x00;
-				DHCP_answer[index_opt_answer+3]=0x00;//01
-				DHCP_answer[index_opt_answer+4]= (DHCP_ARP_timeout & 0xFF00) >> 8;//0x00
-				//DHCP_answer[index_opt_answer+5]=0x3C;//80
-				DHCP_answer[index_opt_answer+5]= DHCP_ARP_timeout & 0xFF;//DHCP_ARP_timeout
-				index_opt_answer = index_opt_answer +6;
-				DHCP_answer[index_opt_answer]=54; // DHCP server IP
-				DHCP_answer[index_opt_answer+1]=4;
-				IP_int2char (LAN_config->LAN_modem_IP, (DHCP_answer + index_opt_answer + 2) );
-				index_opt_answer = index_opt_answer + 6;
-				//DHCP_answer[index_opt_answer]=26; // Interface MTU
-				//DHCP_answer[index_opt_answer+1]=2;
-				//DHCP_answer[index_opt_answer+2]=0x03;//02
-				//DHCP_answer[index_opt_answer+3]=0xE8;//40
-				//index_opt_answer = index_opt_answer + 4;
-				//DHCP_answer[index_opt_answer]=27; // subnets local
-				//DHCP_answer[index_opt_answer+1]=1;
-				//DHCP_answer[index_opt_answer+2]=0x01;
-				//index_opt_answer = index_opt_answer + 3;
-				DHCP_answer[index_opt_answer]=255;// end
-				index_opt_answer = index_opt_answer + 1;
-				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, index_opt_answer, 1);
+				answer_size = DHCP_build_lease_answer(LAN_config, DHCP_answer, proposed_IP, 2);
+				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, answer_size, 1);
 			}
 			
 			if ( (message_type_client == 3) && (loc_status !=0 ) )  { // request -> ack
-				for (i=0; i<4; i++) { //proposed IP 
-					DHCP_answer[i+16] = proposed_IP[i];
-				}
-				
-				message_type_server = 5;
-				DHCP_answer[index_opt_answer]=53; // message type
-				DHCP_answer[index_opt_answer+1]=1;
-				DHCP_answer[index_opt_answer+2]=message_type_server;
-				index_opt_answer = index_opt_answer +3;
-				DHCP_answer[index_opt_answer]=1; // subnet mask
-				DHCP_answer[index_opt_answer+1]=4;
-				IP_int2char (LAN_config->LAN_subnet_mask, (DHCP_answer + index_opt_answer + 2) );
-				index_opt_answer = index_opt_answer +6;
-				if (LAN_config->LAN_def_route_activ == 1) {
-					DHCP_answer[index_opt_answer]=3; // default route
-					DHCP_answer[index_opt_answer+1]=4;
-
-					IP_int2char (LAN_config->LAN_def_route, (DHCP_answer + index_opt_answer + 2) );
-					index_opt_answer = index_opt_answer +6;
-				}
-				if (LAN_config->LAN_DNS_activ == 1) {
-					DHCP_answer[index_opt_answer]=6; // DNS server
-					DHCP_answer[index_opt_answer+1]=4;
-
-					IP_int2char (LAN_config->LAN_DNS_value, (DHCP_answer + index_opt_answer + 2) );
-					index_opt_answer = index_opt_answer +6;
-				}
-				DHCP_answer[index_opt_answer]=51; //Lease Time
-				DHCP_answer[index_opt_answer+1]=4;
-				DHCP_answer[index_opt_answer+2]=0x00;
-				DHCP_answer[index_opt_answer+3]=0x00;//01
-				DHCP_answer[index_opt_answer+4]= (DHCP_ARP_timeout & 0xFF00) >> 8;//51
-				DHCP_answer[index_opt_answer+5]= DHCP_ARP_timeout & 0xFF;
-				index_opt_answer = index_opt_answer +6;
-				DHCP_answer[index_opt_answer]=54; // DHCP server IP
-				DHCP_answer[index_opt_answer+1]=4;
-				IP_int2char (LAN_config->LAN_modem_IP, (DHCP_answer + index_opt_answer + 2) );
-				index_opt_answer = index_opt_answer + 6;
-				//DHCP_answer[index_opt_answer]=26; // Interface MTU
-				//DHCP_answer[index_opt_answer+1]=2;
-				//DHCP_answer[index_opt_answer+2]=0x03;//02
-				//DHCP_answer[index_opt_answer+3]=0xE8;//40
-				//index_opt_answer = index_opt_answer + 4;
-				//DHCP_answer[index_opt_answer]=27; // subnets local
-				//DHCP_answer[index_opt_answer+1]=1;
-				//DHCP_answer[index_opt_answer+2]=0x01;
-				//index_opt_answer = index_opt_answer + 3;
-				DHCP_answer[index_opt_answer]=255;// end
-				index_opt_answer = index_opt_answer + 1;
-				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, index_opt_answer, 1);
+				answer_size = DHCP_build_lease_answer(LAN_config, DHCP_answer, proposed_IP, 5);
+				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, answer_size, 1);
 			}
 			
 			if ( (message_type_client == 3) && (loc_status ==0 ) ) { //request -> NAK
-				//printf ("NAK NAK\r\n");
-				message_type_server = 6; // NAK
-				DHCP_answer[index_opt_answer]=53; // message type
-				DHCP_answer[index_opt_answer+1]=1;
-				DHCP_answer[index_opt_answer+2]=message_type_server;
-				index_opt_answer = index_opt_answer +3;
-				DHCP_answer[index_opt_answer]=255;// end
-				index_opt_answer = index_opt_answer + 1;
-				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, index_opt_answer, 1);
+				answer_size = DHCP_add_option_message_type(DHCP_answer, 240, 6);
+				DHCP_answer[answer_size]=255;// end
+				W5500_write_TX_buffer(W5500, DHCP_SOCKET, DHCP_answer, answer_size + 1, 1);
 			}
 			
 			if ( message_type_client == 7 ) { // DHCP RELEASE
-				//printf ("DHCP RELEASE\r\n");
 				DHCP_release (LAN_config, client_MAC); 
 			}	
 		}
@@ -647,6 +550,9 @@ void ARP_RX_packet_treatment (unsigned char* ARP_RX_packet, int size) {
 	unsigned int ARP_opcode;
 	unsigned long int ARP_sender_IP;
 	unsigned long int ARP_target_IP;
+	if (size < 42) { // Ethernet header (14) and ARP packet (28): the fields below are read up to byte 41
+		return;
+	}
 	ARP_protocol_type = ARP_RX_packet[16]*0x100 + ARP_RX_packet[17];
 	ARP_opcode = ARP_RX_packet[20]*0x100 + ARP_RX_packet[21];
 	if ( (ARP_protocol_type == 0x0800) && (ARP_opcode == 0x0001) ) { // request

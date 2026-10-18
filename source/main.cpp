@@ -47,12 +47,29 @@ DigitalOut LED_connected(PA_12);
 
 DigitalIn Int_W5500(PA_8);
 DigitalOut CS1(PA_11);//CS W5500
-SPI spi_2(PB_5, PB_4, PB_3); // mosi, miso, sclk
+// W5500 and external SRAM on SPI3 (AF6), radio on SPI1 (AF5): two different peripherals.
+// PB_5/PB_4/PB_3 can be SPI1 (AF5) or SPI3 (AF6). Up to mbed-os 5.8.5 the plain names select SPI3.
+// Since 5.8.6 the plain names select SPI1 (the same peripheral as the radio on PA_7/PA_6/PA_5)
+// and the _ALT0 names select SPI3. Two SPI objects on one peripheral corrupt each other.
+// NPR_SPI2_ALT0 can be set by the build (tools/mbed_port/build_port.sh reads the pin map of the
+// mbed-os tree). Without it the version decides: ALT0 from mbed-os 5.8.6 on.
+#ifndef NPR_SPI2_ALT0
+#if defined(MBED_ENCODE_VERSION) && defined(MBED_VERSION)
+#if MBED_VERSION >= MBED_ENCODE_VERSION(5, 8, 6)
+#define NPR_SPI2_ALT0 1
+#endif
+#endif
+#endif
+#if defined(NPR_SPI2_ALT0) && NPR_SPI2_ALT0
+SPI_F4HDK spi_2(PB_5_ALT0, PB_4_ALT0, PB_3_ALT0); // mosi, miso, sclk
+#else
+SPI_F4HDK spi_2(PB_5, PB_4, PB_3); // mosi, miso, sclk
+#endif
 DigitalOut CS3(PB_0);// CS ext SRAM PB_0 
 
 InterruptIn Int_SI4463(PA_3);
 DigitalOut CS2(PA_4);
-SPI spi_1(PA_7, PA_6, PA_5); // mosi, miso, sclk
+SPI_F4HDK spi_1(PA_7, PA_6, PA_5); // mosi, miso, sclk
 
 // Translate the reset flags of the MCU into the code behind G_reset_reason.
 // One reset sets several flags (a power-on also sets the pin flag), so the order matters.
@@ -72,9 +89,9 @@ int main()
 	// read the reset flags first and clear them so the next start sees only its own reason
 	G_reset_reason = decode_reset_reason(RCC->CSR);
 	RCC->CSR |= RCC_CSR_RMVF;
-    wait_ms(200);
+    ThisThread::sleep_for(200);
 	pc.baud(921600);
-    pc.printf("\r\n\r\n" FW_BANNER_FORMAT, FW_VERSION, snmp_reset_reason_text(G_reset_reason));
+    pc.printf("\r\n\r\n" FW_BANNER_FORMAT, FW_VERSION, MBED_OS_VERSION, snmp_reset_reason_text(G_reset_reason));
 	
 	Timer slow_timer; 
 	int i = 1;
@@ -131,12 +148,12 @@ int main()
 	CS3=1;
 	SI4463_SDN = 1;
 	
-	wait_ms(20);
+	ThisThread::sleep_for(20);
 	is_SRAM_ext = ext_SRAM_detect();
 	
 	LED_RX_loc = 1; 
 	for (i=0; i<7; i++) {
-		wait_ms(200);
+		ThisThread::sleep_for(200);
 		LED_RX_loc = !LED_RX_loc;
 		LED_connected = !LED_connected;
 		SI4463_SDN = !SI4463_SDN;
@@ -176,7 +193,7 @@ int main()
 		printf("config WITHOUT ext SRAM\r\n");
 	}
 	
-	wait_ms(100);
+	ThisThread::sleep_for(100);
 	NFPR_config_read(&Random_pin);
 
 	//SI4463_print_version(G_SI4463);//!!!!
@@ -188,7 +205,7 @@ int main()
 	} else {
 		HMI_printf("SI4463 error while configure\r\n");
 		SI4463_print_version(G_SI4463);
-		wait_ms(5000);
+		ThisThread::sleep_for(5000);
 		if (serial_term_loop() == 0) {//no serial char detected
 			NVIC_SystemReset(); //reboot
 		}
@@ -196,10 +213,10 @@ int main()
 	//SI4463_print_version(G_SI4463);//!!!!
 	
 	W5500_initial_configure(W5500_p1);
-	wait_ms(2);
+	ThisThread::sleep_for(2);
 #ifdef EXT_SRAM_USAGE
 	ext_SRAM_set_mode(SPI_SRAM_p);
-	wait_ms(2)
+	ThisThread::sleep_for(2);
 	ext_SRAM_init();
 #endif
 	TDMA_NULL_frame_init(70);
@@ -293,6 +310,7 @@ int main()
 		serial_term_loop();
 
 		snmp_loop(W5500_p1);
+		W5500_link_poll(W5500_p1);
 		
 		if ( (LAN_conf_applied.DHCP_server_active == 1) && (!is_TDMA_master) ) {
 			DHCP_server(LAN_conf_p, W5500_p1);

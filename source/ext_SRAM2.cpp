@@ -220,7 +220,6 @@ void ext_SRAM_test(ext_SRAM_chip* loc_SPI) {
 	//loc_SPI->cs->write(1);
 	for (i=0; i<5000; i++) {
 		loc_address = 16 * i;
-		//wait_ms(1);
 		sprintf ((char*)test_table, "jourbon %i", i);
 		ext_SRAM_write(loc_SPI, test_table, loc_address, 20);
 		printf("write %i\r\n", i);
@@ -230,7 +229,6 @@ void ext_SRAM_test(ext_SRAM_chip* loc_SPI) {
 		for (j=0; j<30; j++) {
 			test_table2[j] = 0;
 		}
-		//wait_ms(1);
 		ext_SRAM_read2(loc_SPI, test_table2, loc_address, 20);
 		test_table2[12] = 0;
 		printf ("read addr %i content '%s' \r\n", loc_address, test_table2);

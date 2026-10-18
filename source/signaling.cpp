@@ -178,7 +178,7 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 	int i;
 	int existing_entry = -1;
 	unsigned char client_ID = 0xFF;
-	static unsigned char raw_answer[60];
+	static unsigned char raw_answer[61]; // the ACK is 61 bytes: type, size, 59 bytes of content
 	unsigned char NACK_reason;
 	unsigned long int proposed_IP;
 	unsigned char previous_status;
@@ -299,49 +299,54 @@ void signaling_connect_ACK_process(unsigned char* raw_data)
 	unsigned long int local_DNS_value;
 	
 	int need_LAN_reset = 0;
+	unsigned char reset_why = 0; // which parameter differs from the master, one bit each, shown by 'phy'
 	//Client ID
 	local_client_ID = raw_data[0];
+	if (local_client_ID >= radio_addr_table_size) { // the ID is used as table index, ignore an ACK with another one
+		return;
+	}
 	my_radio_client_ID = local_client_ID;
 	TDMA_NULL_frame_init(70);
 	// IP Start
 	local_IP_start = IP_char2int(raw_data + 17);
-	if (local_IP_start != LAN_conf_applied.DHCP_range_start) {need_LAN_reset = 1;}
+	if (local_IP_start != LAN_conf_applied.DHCP_range_start) {need_LAN_reset = 1; reset_why |= 0x01;}
 	LAN_conf_applied.DHCP_range_start = local_IP_start;
 	// IP Size
 	local_IP_size = IP_char2int(raw_data + 21);
-	if (local_IP_size != LAN_conf_applied.DHCP_range_size) {need_LAN_reset = 1;}
+	if (local_IP_size != LAN_conf_applied.DHCP_range_size) {need_LAN_reset = 1; reset_why |= 0x02;}
 	LAN_conf_applied.DHCP_range_size = local_IP_size;
 	// Master Callsign
-	strcpy(CONF_radio_master_callsign, (char*)(raw_data + 25));
+	strncpy(CONF_radio_master_callsign, (char*)(raw_data + 25), 15); // the field has no end marker check, so bound the copy
+	CONF_radio_master_callsign[15] = 0;
 	// Modem IP
 	local_modem_IP = IP_char2int(raw_data + 41);
-	if (local_modem_IP != LAN_conf_applied.LAN_modem_IP) {need_LAN_reset = 1;}
+	if (local_modem_IP != LAN_conf_applied.LAN_modem_IP) {need_LAN_reset = 1; reset_why |= 0x04;}
 	LAN_conf_applied.LAN_modem_IP = local_modem_IP;
 	// IP subnet mask
 	local_IP_subnet = IP_char2int(raw_data + 45);
-	if (local_IP_subnet != LAN_conf_applied.LAN_subnet_mask) {need_LAN_reset = 1;}
+	if (local_IP_subnet != LAN_conf_applied.LAN_subnet_mask) {need_LAN_reset = 1; reset_why |= 0x08;}
 	LAN_conf_applied.LAN_subnet_mask = local_IP_subnet;
 	// Default route active
 	local_default_route_activ = raw_data[49];
-	if (local_default_route_activ != LAN_conf_applied.LAN_def_route_activ) {need_LAN_reset = 1;}
+	if (local_default_route_activ != LAN_conf_applied.LAN_def_route_activ) {need_LAN_reset = 1; reset_why |= 0x10;}
 	LAN_conf_applied.LAN_def_route_activ = local_default_route_activ;
 	// Default route value
 	local_default_route = IP_char2int(raw_data + 50);
-	if (local_default_route != LAN_conf_applied.LAN_def_route) {need_LAN_reset = 1;}
+	if (local_default_route != LAN_conf_applied.LAN_def_route) {need_LAN_reset = 1; reset_why |= 0x20;}
 	LAN_conf_applied.LAN_def_route = local_default_route;
 	// DNS active
 	local_DNS_activ = raw_data[54];
-	if (local_DNS_activ != LAN_conf_applied.LAN_DNS_activ) {need_LAN_reset = 1;}
+	if (local_DNS_activ != LAN_conf_applied.LAN_DNS_activ) {need_LAN_reset = 1; reset_why |= 0x40;}
 	LAN_conf_applied.LAN_DNS_activ = local_DNS_activ;
 	// DNS value
 	local_DNS_value = IP_char2int(raw_data + 55);
-	if (local_DNS_value != LAN_conf_applied.LAN_DNS_value) {need_LAN_reset = 1;}
+	if (local_DNS_value != LAN_conf_applied.LAN_DNS_value) {need_LAN_reset = 1; reset_why |= 0x80;}
 	LAN_conf_applied.LAN_DNS_value = local_DNS_value;
 	
 	if (need_LAN_reset) {
 		HMI_force_exit();
 		reset_DHCP_table(&LAN_conf_applied);
-		W5500_re_configure();
+		W5500_re_configure(reset_why);
 		need_LAN_reset = 0;
 	}
 	my_client_radio_connexion_state = 2;
@@ -354,6 +359,10 @@ void signaling_connect_NACK_process (unsigned char reason_loc) {
 	//printf("NACK reason: %i\r\n", reason_loc);
 	G_connect_rejection_reason = reason_loc;
 	my_client_radio_connexion_state = 3;
+	// The master frees the old entry and gives that ID no TX slot. Only the unconnected ID 0x7E
+	// has one, so keep the old ID and the retries in state 3 never reach the master.
+	my_radio_client_ID = 0x7E;
+	TDMA_NULL_frame_init(70);
 	connect_state_machine_counter = 0;
 }
 
@@ -522,6 +531,11 @@ void signaling_frame_push(void) {
 		//TXPS_FIFO->last_ready = TXPS_FIFO->WR_point;
 	}
 	TX_signal_frame_point = 0;
+}
+
+void signaling_get_counters(int* since_request, int* since_ack) {
+	*since_request = connect_state_machine_counter;
+	*since_ack = time_counter_last_ack;
 }
 
 void signaling_periodic_call() { // called every 2 to 6 seconds

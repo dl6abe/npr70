@@ -1,0 +1,42 @@
+diff --git a/tools/export/exporters.py b/tools/export/exporters.py
+index 8524334a60..e71df7a05e 100644
+--- a/tools/export/exporters.py
++++ b/tools/export/exporters.py
+@@ -108,7 +108,7 @@ class Exporter(object):
+                  in self.toolchain.flags.items()}
+         asm_defines = self.toolchain.get_compile_options(
+             self.toolchain.get_symbols(for_asm=True),
+-            filter(None, self.resources.inc_dirs),
++            list(filter(None, self.resources.inc_dirs)),
+             for_asm=True)
+         c_defines = ["-D" + symbol for symbol in self.toolchain.get_symbols()]
+         flags['asm_flags'] += asm_defines
+diff --git a/tools/export/makefile/__init__.py b/tools/export/makefile/__init__.py
+index 3002b66a79..eb7d87abbc 100644
+--- a/tools/export/makefile/__init__.py
++++ b/tools/export/makefile/__init__.py
+@@ -149,7 +149,7 @@ class Makefile(Exporter):
+         flags = {}
+         for k, v in self.flags.items():
+             if k in ['asm_flags', 'c_flags', 'cxx_flags']:
+-                flags[k] = map(lambda x: x.replace('"', '\\"'), v)
++                flags[k] = list(map(lambda x: x.replace('"', '\\"'), v))
+             else:
+                 flags[k] = v
+ 
+diff --git a/tools/toolchains/__init__.py b/tools/toolchains/__init__.py
+index 906e39ae40..d0df6b04be 100644
+--- a/tools/toolchains/__init__.py
++++ b/tools/toolchains/__init__.py
+@@ -95,9 +95,9 @@ class LazyDict(dict):
+     def items(self):
+         """Warning: This forces the evaluation all of the items in this LazyDict
+         that are iterated over."""
+-        for k, v in self.eager.items():
++        for k, v in list(self.eager.items()):
+             yield k, v
+-        for k in self.lazy.keys():
++        for k in list(self.lazy.keys()):
+             yield k, self[k]
+ 
+     def apply(self, fn):

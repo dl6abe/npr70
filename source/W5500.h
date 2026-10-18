@@ -19,6 +19,7 @@
 #define W5500_F4
 
 #include "mbed.h"
+#include "SPI_F4HDK.h"
 
 // W5500 SPI commands work as follows:
 // - Block address: base address for sockets, common settings, etc
@@ -66,7 +67,7 @@
 #define W5500_SOCK_LAST_ACK    0x1d
 
 struct W5500_chip{
-    SPI* spi_port;
+    SPI_F4HDK* spi_port;
     DigitalOut* cs;
 	DigitalIn* interrupt;
 	unsigned char sock_interrupt;
@@ -102,15 +103,30 @@ void W5500_read_RX_buffer(W5500_chip* SPI_p_loc, uint8_t sock_nb,  uint8_t* data
 
 uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data, uint32_t len);
 
-int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data);
+int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data, int max_size);
 
 void W5500_write_TX_buffer(W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* data, int size, int send_mac);
 
-void W5500_re_configure (void);
+void W5500_re_configure (unsigned char why = 0); // why: bit mask of the changed LAN parameters (see signaling.cpp), 0 = other
 
 void W5500_re_configure_gateway(W5500_chip* SPI_p_loc);
 
 void W5500_re_configure_periodic_call(W5500_chip* SPI_p_loc);
+
+// Debug of the Ethernet PHY (command 'phy'): link tracking and a PHY reset without blocking
+void W5500_link_poll(W5500_chip* SPI_p_loc);
+unsigned char W5500_link_phycfgr(void);       // last PHYCFGR value read by W5500_link_poll
+unsigned int W5500_link_changes(void);        // number of link up/down changes since start
+unsigned int W5500_link_last_change_s(void);  // seconds since start at the last change
+void W5500_phy_reset_start(void);             // PHY reset, released about 300 ms later by W5500_link_poll
+void W5500_phy_set_mode(W5500_chip* SPI_p_loc, unsigned char mode); // OPMDC (0 to 5, 7), not saved
+int W5500_reconf_state(void);                 // 0 not configured, 1 ready, 2 to 4 re-configure running
+unsigned int W5500_reconf_runs(void);         // number of re-configure requests since start
+unsigned char W5500_reconf_why(void);         // reason mask of the last request
+unsigned int W5500_reconf_last_s(void);       // seconds since start at the last request
+unsigned int W5500_heal_count(void);          // PHY self-heal actions since start
+unsigned int W5500_heal_last_s(void);         // seconds since start at the last action
+unsigned int W5500_link_down_s(void);         // seconds the link has been down, 0 if up
 
 void W5500_initial_configure(W5500_chip* SPI_p_loc); 
 
