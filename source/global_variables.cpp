@@ -29,7 +29,6 @@ DigitalOut* G_PTT_PA_pin;
 ext_SRAM_chip* SPI_SRAM_p;
 
 Serial pc(SERIAL_TX, SERIAL_RX);
-//DigitalOut* LED_connected_p;
 
 Timeout SI4463_prepa_TX_1_call;
 
@@ -40,7 +39,6 @@ unsigned int RX_FIFO_RD_point = 0;
 unsigned int RX_FIFO_last_received = 0;
 unsigned char RX_FIFO_data[0x2000]; //8kB
 
-//unsigned int debug_counter = 0;
 unsigned int RX_top_FDD_up_counter = 0;
 int RX_Eth_IPv4_counter = 0;
 int TX_radio_IPv4_counter = 0;
@@ -56,7 +54,6 @@ unsigned int TX_buff_intern_WR_pointer=0;
 unsigned int TX_buff_intern_RD_pointer=0;
 unsigned int TX_buff_intern_last_ready=0;
 
-unsigned char TX_buff_ext_sizes[1024];//1024
 unsigned int TX_buff_ext_WR_pointer;
 unsigned int TX_buff_ext_RD_pointer;
 unsigned int TX_buff_ext_last_ready;
@@ -129,18 +126,11 @@ unsigned char G_reset_reason = 0;
 #define FW_BUILD_ID "unknown"
 #endif
 const char FW_VERSION_ID[] = FW_BUILD_ID;
-// mbed-os version: mbed.h of 5.7 and later defines MBED_MAJOR_VERSION, MBED_MINOR_VERSION and
-// MBED_PATCH_VERSION, so the string always names the library that was really compiled in.
-// mbed.h of 5.6.6 has no such macros, there the Makefile passes NPR_MBED_OS_VERSION.
+// mbed-os version: mbed.h defines MBED_MAJOR_VERSION, MBED_MINOR_VERSION and MBED_PATCH_VERSION,
+// so the string names the library that was really compiled in.
 #define NPR_STR_(x) #x
 #define NPR_STR(x) NPR_STR_(x)
-#if defined(MBED_MAJOR_VERSION) && defined(MBED_MINOR_VERSION) && defined(MBED_PATCH_VERSION)
 const char MBED_OS_VERSION_ID[] = NPR_STR(MBED_MAJOR_VERSION) "." NPR_STR(MBED_MINOR_VERSION) "." NPR_STR(MBED_PATCH_VERSION);
-#elif defined(NPR_MBED_OS_VERSION)
-const char MBED_OS_VERSION_ID[] = NPR_MBED_OS_VERSION;
-#else
-const char MBED_OS_VERSION_ID[] = "unknown";
-#endif
 int G_need_temperature_check = 0;
 unsigned long int CONF_radio_IP_size_requested;
 unsigned char CONF_radio_static_IP_requested;
@@ -152,6 +142,7 @@ unsigned char CONF_preamble_TX_short;
 unsigned long int last_rframe_seen = 0;
 
 long int TDMA_table_TA[radio_addr_table_size];
+unsigned char G_ta_valid[radio_addr_table_size];
 
 unsigned short int G_downlink_RSSI; 
 unsigned short int G_radio_addr_table_RSSI[radio_addr_table_size]; 

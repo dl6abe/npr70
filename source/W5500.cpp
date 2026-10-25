@@ -99,13 +99,6 @@ void W5500_write_byte(W5500_chip* SPI_p_loc, unsigned int W5500_addr, unsigned c
 }
 
 
-void W5500_Phy_off_2sec(W5500_chip* SPI_p_loc) {
-    //unsigned char phy_config[1];
-    W5500_write_byte(SPI_p_loc, 0x002E, 0x00, 0x70);
-    ThisThread::sleep_for(5000);
-    W5500_write_byte(SPI_p_loc, 0x002E, 0x00, 0xF8);
-}
-
 uint16_t W5500_read_received_size(W5500_chip* SPI_p_loc, uint8_t sock_nb) {
 	uint16_t size=9999, previous_size=9999;
 	unsigned char data[2];
@@ -115,19 +108,6 @@ uint16_t W5500_read_received_size(W5500_chip* SPI_p_loc, uint8_t sock_nb) {
 		size = (data[0] << 8) + data[1];
 	} while (previous_size != size);
 		
-	return size;
-}
-
-int W5500_read_TX_free_size(W5500_chip* SPI_p_loc, uint8_t sock_nb) {
-	int size=9999, previous_size=9999;
-	unsigned char data[10];
-	do {
-		previous_size = size;
-		W5500_read_short(SPI_p_loc, W5500_Sn_TX_FSR0, sock_nb, data);
-		size = data[1] + data[0]*256;
-	} while (previous_size != size);
-		
-	//printf("size:%d\r\n", size);
 	return size;
 }
 
@@ -182,7 +162,6 @@ uint32_t W5500_read_UDP_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, uint8_t* d
 	wait_us(1);
 	SPI_p_loc->cs->write(1);
 	wait_us(2);
-	// printf ("size UDP:%d\r\n", size);
 
 	read_pointer = read_pointer + packet_size + 8; // skip the whole packet, also the part that did not fit into `data`
 	read_pointer_raw[0] = read_pointer / 256;
@@ -225,7 +204,6 @@ int W5500_read_MAC_pckt (W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char* 
 	wait_us(1);
 	SPI_p_loc->cs->write(1);
 	wait_us(2);
-	//printf ("size UDP:%d\r\n", size);
 	read_pointer = read_pointer + size ;
 		
 	read_pointer_raw[0] = read_pointer / 256;
@@ -268,17 +246,6 @@ void W5500_re_configure (unsigned char why) {
 	reconf_runs++;
 	reconf_why = why;
 	reconf_last_s = (unsigned int)time(NULL);
-}
-
-void W5500_re_configure_gateway(W5500_chip* SPI_p_loc) {
-	unsigned char data[10];
-	if ( (LAN_conf_applied.LAN_def_route_activ) && (is_telnet_routed) && (is_TDMA_master) ) { 
-		IP_int2char (LAN_conf_applied.LAN_def_route, data);
-		W5500_write_long(SPI_p_loc, 0x0001, 0x00, data, 4); // gateway 
-	} else {
-		IP_int2char (0x01010101, data);
-		W5500_write_long(SPI_p_loc, 0x0001, 0x00, data, 4);
-	}	
 }
 
 void W5500_re_configure_periodic_call(W5500_chip* SPI_p_loc) {
@@ -332,7 +299,7 @@ static int reconf_active = 0;
 static unsigned int reconf_since_us = 0;
 
 void W5500_link_poll(W5500_chip* SPI_p_loc) {
-	unsigned int now = GLOBAL_timer.read_us();
+	unsigned int now = TIMER_READ_US(GLOBAL_timer);
 	unsigned char mode = (phy_mode_now == 0xFF) ? CONF_Eth_mode : phy_mode_now;
 	unsigned char v;
 	if (phy_reset_pending && ((int)(now - phy_reset_release_us) >= 0)) {
@@ -388,21 +355,20 @@ void W5500_link_poll(W5500_chip* SPI_p_loc) {
 	}
 }
 
-unsigned char W5500_link_phycfgr(void) { return phy_last_phycfgr; }
 int W5500_reconf_state(void) { return W5500_configured; }
 unsigned int W5500_reconf_runs(void) { return reconf_runs; }
 unsigned char W5500_reconf_why(void) { return reconf_why; }
 unsigned int W5500_reconf_last_s(void) { return reconf_last_s; }
 unsigned int W5500_heal_count(void) { return phy_heal_count; }
 unsigned int W5500_heal_last_s(void) { return phy_heal_last_s; }
-unsigned int W5500_link_down_s(void) { return phy_link_down ? (unsigned int)((GLOBAL_timer.read_us() - phy_down_since_us) / 1000000) : 0; }
+unsigned int W5500_link_down_s(void) { return phy_link_down ? (unsigned int)((TIMER_READ_US(GLOBAL_timer) - phy_down_since_us) / 1000000) : 0; }
 unsigned int W5500_link_changes(void) { return phy_link_changes; }
 unsigned int W5500_link_last_change_s(void) { return phy_last_change_s; }
 
 void W5500_phy_reset_start(void) {
 	unsigned char mode = (phy_mode_now == 0xFF) ? CONF_Eth_mode : phy_mode_now;
 	W5500_write_byte(W5500_p1, 0x002E, W5500_Common_register_block, (mode << 3) + 0x40); // RST bit low: PHY in reset
-	phy_reset_release_us = GLOBAL_timer.read_us() + 300000;
+	phy_reset_release_us = TIMER_READ_US(GLOBAL_timer) + 300000;
 	phy_reset_pending = 1;
 }
 
@@ -418,22 +384,15 @@ void W5500_phy_set_mode(W5500_chip* SPI_p_loc, unsigned char mode) {
 void W5500_initial_configure(W5500_chip* SPI_p_loc) {
     // reset
     W5500_write_byte(SPI_p_loc, 0x0000, W5500_Common_register_block, 0x80);//0x90
-	ThisThread::sleep_for(500);
+	ThisThread::sleep_for(500ms);
 	W5500_write_byte(SPI_p_loc, 0x0000, W5500_Common_register_block, 0x00);//0x10
-	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC8);
 	W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (CONF_Eth_mode << 3) + 0x40);//48 78 for 10MB full duplex / 40 half duplex !!!
-	ThisThread::sleep_for(1600);
+	ThisThread::sleep_for(1600ms);
 	W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, (CONF_Eth_mode << 3) + 0xC0);//c8 F8 for 10MB full duplex / c0 half duplexc8 !!!
-	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC8);
     
-	//W5500_write_byte(SPI_p_loc, 0x002E, W5500_Common_register_block, 0xC0);
     
     //IP & MAC config
-    //unsigned char data[20]={0x00,0x2E,0x00,4,5,6, 10,151,20,254};
-	//unsigned char data[20]={0x00,0x2E,0x00,4,5,6, 192,168,0,254};
 	unsigned char data[20]={0x00,0x2E,0x00,4,5,6};
-	//W5500_write_long(SPI_p_loc, 0x0009, 0x00, data, 6); // modem MAC
-	//W5500_write_long(SPI_p_loc, 0x0009, 0x00, LAN_conf_applied.modem_MAC, 6); // modem MAC
 	W5500_write_long(SPI_p_loc, 0x0009, W5500_Common_register_block, CONF_modem_MAC, 6); // modem MAC
 	IP_int2char (LAN_conf_applied.LAN_modem_IP, data);
 	W5500_write_long(SPI_p_loc, 0x000F, W5500_Common_register_block, data, 4); // modem IP
@@ -472,20 +431,19 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	// Socket 0 MAC RAW for packet switching
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, RAW_SOCKET, 0x34); //config B4 for classic
 	W5500_write_byte(SPI_p_loc, W5500_Sn_IMR, RAW_SOCKET, 0x04); //Interrupt mask : RECV
-	ThisThread::sleep_for(10);
+	ThisThread::sleep_for(10ms);
 	W5500_write_byte(SPI_p_loc, W5500_Sn_CR, RAW_SOCKET, 0x01); //open
 	
     // Socket 1 telnet 
     W5500_write_byte(SPI_p_loc, W5500_Sn_MR, TELNET_SOCKET, 0x01); //config
-    ThisThread::sleep_for(10);
+    ThisThread::sleep_for(10ms);
     data[0]=0x00; //port 0d23
     data[1]=0x17;
     W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, TELNET_SOCKET, data, 2); //port 23 (0x17)
-	//W5500_write_byte(SPI_p_loc, 0x002C, TELNET_SOCKET, 0x00); //interrupt mask
 	
 	// Socket 2 RTP port 1519
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, RTP_SOCKET, 0x42); //config
-	ThisThread::sleep_for(10);
+	ThisThread::sleep_for(10ms);
 	data[0]=0x05; //port 0d1519
     data[1]=0xEF;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, RTP_SOCKET, data, 2); //port rx 1519 
@@ -501,7 +459,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	
 	// Socket 3 DHCP server
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, DHCP_SOCKET, 0x02); //config
-	ThisThread::sleep_for(10);
+	ThisThread::sleep_for(10ms);
 	data[0]=0x00; //port 0d67
     data[1]=0x43;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, DHCP_SOCKET, data, 2); //port rx 67 
@@ -520,7 +478,7 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 	
 	// Socket 4 UDP_FDD
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, FDD_SOCKET, 0x42); //config
-	ThisThread::sleep_for(10);
+	ThisThread::sleep_for(10ms);
 	data[0]=0x1A; //port TX 0d6716 = 0x1A3E
     data[1]=0x3E;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, FDD_SOCKET, data, 2);
@@ -533,11 +491,10 @@ void W5500_initial_configure(W5500_chip* SPI_p_loc) {
 
 	// Socket 5 SNMP Agent
 	W5500_write_byte(SPI_p_loc, W5500_Sn_MR, SNMP_SOCKET, 0x02); //config
-	ThisThread::sleep_for(10);
+	ThisThread::sleep_for(10ms);
 	data[0]=0x00; //port 161
     data[1]=0xa1;
 	W5500_write_long(SPI_p_loc, W5500_Sn_PORT0, SNMP_SOCKET, data, 2); //port rx 161
-	// W5500_write_long(SPI_p_loc, W5500_Sn_DPORT0, SNMP_SOCKET, data, 2); //port tx 161
 	W5500_write_byte(SPI_p_loc, W5500_Sn_CR, SNMP_SOCKET, 0x01); // Open the socket
 	
 	// Socket 6

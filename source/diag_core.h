@@ -100,6 +100,77 @@ static inline int diag_lat_line(const diag_lat_T* s, int running, int index, cha
 	return 0;
 }
 
+// Statistics of the TA measurement at the master (issue #47). TDMA_TA_measure_single_frame drops a measurement outside of
+// the window and a frame without the synchro bit or with a wrong parity without a trace; these counters show which.
+#define DIAG_TA_CLIENTS 7
+enum { DIAG_TA_FRAME, DIAG_TA_SYNC_UP, DIAG_TA_PARITY, DIAG_TA_UNKNOWN, DIAG_TA_UNCONNECTED, DIAG_TA_ACCEPTED, DIAG_TA_BELOW, DIAG_TA_ABOVE, DIAG_TA_N };
+
+typedef struct {
+	uint32_t n[DIAG_TA_N];
+	uint32_t accepted_client[DIAG_TA_CLIENTS];
+	uint32_t values;                 // raw values recorded (accepted, below, above)
+	int32_t last, min, max;          // raw TA_answer in microseconds
+} diag_ta_T;
+
+static inline void diag_ta_clear(diag_ta_T* s) {
+	memset(s, 0, sizeof(*s));
+}
+
+static inline void diag_ta_count(diag_ta_T* s, int what) {
+	if ( (what >= 0) && (what < DIAG_TA_N) ) s->n[what]++;
+}
+
+// A raw measurement of a known client: counts accepted / below / above and keeps last, smallest and largest value.
+static inline void diag_ta_value(diag_ta_T* s, int what, int32_t a, int client) {
+	diag_ta_count(s, what);
+	if ( (what == DIAG_TA_ACCEPTED) && (client >= 0) && (client < DIAG_TA_CLIENTS) ) s->accepted_client[client]++;
+	if (s->values == 0 || a < s->min) s->min = a;
+	if (s->values == 0 || a > s->max) s->max = a;
+	s->last = a;
+	s->values++;
+}
+
+// Fill of a FIFO from its two counters that only count up: write minus read, 0 when the read counter is ahead.
+static inline int diag_buf_fill(unsigned int wr, unsigned int rd) {
+	int d = (int)(wr - rd);
+	return d < 0 ? 0 : d;
+}
+
+// Statistics of a time span in microseconds (issue #41): how long the start of a transmission takes.
+typedef struct {
+	uint32_t count;
+	uint32_t min_us;
+	uint32_t max_us;
+	uint32_t last_us;
+	uint64_t sum_us;
+} diag_span_T;
+
+static inline void diag_span_clear(diag_span_T* s) {
+	s->count = 0;
+	s->min_us = 0xFFFFFFFFu;
+	s->max_us = 0;
+	s->last_us = 0;
+	s->sum_us = 0;
+}
+
+static inline void diag_span_record(diag_span_T* s, uint32_t us) {
+	if ( (s->count == 0) || (us < s->min_us) ) s->min_us = us;   // an all-zero state is empty too
+	if (us > s->max_us) s->max_us = us;
+	s->count++;
+	s->last_us = us;
+	s->sum_us += us;
+}
+
+// One line of 'txlat': label, number of spans, smallest, mean, largest, last. Without a span only the label.
+static inline void diag_span_line(const char* label, const diag_span_T* s, char* out, size_t size) {
+	if (s->count == 0) {
+		snprintf(out, size, "  %-34s none yet\r\n", label);
+		return;
+	}
+	snprintf(out, size, "  %-34s n %6lu  min %5lu  mean %5lu  max %5lu  last %5lu\r\n", label, (unsigned long)s->count, (unsigned long)s->min_us,
+	         (unsigned long)(s->sum_us / s->count), (unsigned long)s->max_us, (unsigned long)s->last_us);
+}
+
 // One line of the 'stack' output: label, bytes used, size, percent.
 static inline void diag_stack_line(const char* label, unsigned int used, unsigned int total, char* out, size_t size) {
 	snprintf(out, size, "  %-20s %5u of %5u (%u %%)\r\n", label, used, total, total ? (unsigned int)(100ULL * used / total) : 0u);

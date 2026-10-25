@@ -63,7 +63,6 @@ void ext_SRAM_read2(ext_SRAM_chip* loc_SPI, unsigned char* loc_data, unsigned in
 */
 
 void ext_SRAM_write(ext_SRAM_chip* loc_SPI, unsigned char* loc_data, unsigned int address, int size) {
-	//static unsigned char trash[350];
 	static unsigned char command[6] = {0x02, 0x00, 0x00, 0x00};
 	loc_SPI->cs->write(0);
 	command[3] = address & 0xFF;
@@ -114,17 +113,14 @@ void TXPS_FIFO_fill(unsigned char* loc_data, int size) {
 	int size_to_write;
 	if ( ( (TXPS_FIFO->WR_point & TXPS_FIFO->mask) +  size) > TXPS_FIFO->mask) { // to big for 1 step
 		size_to_write = (TXPS_FIFO->mask + 1 - (TXPS_FIFO->WR_point & TXPS_FIFO->mask) );
-		//G_SI4463->spi->transfer_2 (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), size_to_write, SI_trash, size_to_write);
 		memcpy (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), loc_data, size_to_write); 
 		TXPS_FIFO->WR_point = TXPS_FIFO->WR_point + size_to_write; // should become ZERO
 		//second step
 		size_to_write = size - size_to_write; 
-		//G_SI4463->spi->transfer_2 (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), size_to_write, SI_trash, size_to_write);
 		memcpy (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), loc_data, size_to_write); 
 		TXPS_FIFO->WR_point = TXPS_FIFO->WR_point + size_to_write;
 		TXPS_FIFO->last_ready = TXPS_FIFO->WR_point;
 	} else { //1 step is enough
-		//G_SI4463->spi->transfer_2 (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), size, SI_trash, size);
 		memcpy (TXPS_FIFO->data + (TXPS_FIFO->WR_point & TXPS_FIFO->mask), loc_data, size); 
 		TXPS_FIFO->WR_point = TXPS_FIFO->WR_point + size;
 		TXPS_FIFO->last_ready = TXPS_FIFO->WR_point;
@@ -161,7 +157,7 @@ void ext_SRAM_periodic_call() {
 	int frame_size;
 	
 	nb_buffer_treated = 0;
-	loc_time_int = GLOBAL_timer.read_us();
+	loc_time_int = TIMER_READ_US(GLOBAL_timer);
 	loc_time_char = (loc_time_int >> 16) & 0xFF; 
 	//condition a rajouter sur buffer interne TXPS
 	if ((TXPS_FIFO->last_ready - TXPS_FIFO->RD_point) < 3740 ) { //16380 - 350 ; 3740
@@ -169,16 +165,13 @@ void ext_SRAM_periodic_call() {
 	} else {
 		fifo_full = 1;
 	}
-	//printf("FIFO full : %i\r\n", fifo_full);
 	while ( (nb_buffer_treated<8) && (one_packet_ok==0) && (fifo_full == 0) ) {//loop over all buffers
 		switch_to_next_buff = 0;
 		if (extSRAM_FIFO_filling[current_buff] > 0) {//data available in current buffer
 			extSRAM_pointer = extSRAM_FIFOs[current_buff][extSRAM_FIFO_index_read[current_buff]];
 			frame_datation = extSRAM_pkt_timer[extSRAM_pointer];
-			//frame_size = extSRAM_pkt_size[extSRAM_pointer] + 2 + SI4463_offset_size;
 			frame_size = extSRAM_pkt_size[extSRAM_pointer];
 			if ( (loc_time_char - frame_datation) < CONF_Tx_rframe_timeout) {//frame ok
-				//printf("frame OK ext SRAM\r\n");
 				ext_SRAM_read (SPI_SRAM_p, radio_pckt, extSRAM_pointer*350, frame_size);
 				radio_pckt[1] = frame_size - 2 - SI4463_offset_size;//-2
 				TXPS_FIFO_fill (radio_pckt, frame_size);
@@ -217,7 +210,6 @@ void ext_SRAM_test(ext_SRAM_chip* loc_SPI) {
 	unsigned int loc_address;
 	int i, j;
 	printf("\r\nsram test begin\r\n");
-	//loc_SPI->cs->write(1);
 	for (i=0; i<5000; i++) {
 		loc_address = 16 * i;
 		sprintf ((char*)test_table, "jourbon %i", i);
@@ -233,11 +225,11 @@ void ext_SRAM_test(ext_SRAM_chip* loc_SPI) {
 		test_table2[12] = 0;
 		printf ("read addr %i content '%s' \r\n", loc_address, test_table2);
 	}
-	timer1 = GLOBAL_timer.read_us();
+	timer1 = TIMER_READ_US(GLOBAL_timer);
 	for (i=0; i<10; i++) {
 		memcpy(test_table2+i, test_table+i, 350);
 	}
-	timer2 = GLOBAL_timer.read_us();
+	timer2 = TIMER_READ_US(GLOBAL_timer);
 	printf("temps memcpy 350 %i\r\n", timer2-timer1);
 }
 

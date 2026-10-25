@@ -1,5 +1,5 @@
 // Compatibility layer for Mbed OS CE. Force-included into every firmware source file (npr70-ce/CMakeLists.txt),
-// so the sources in npr70/source stay unchanged for mbed-os 5.15.9.
+// so the sources in npr70/source need no change for the CE API.
 //
 // mbed::Serial is gone in Mbed OS 6 and CE. The firmware uses one Serial object (pc) for the console:
 // readable(), getc(pc), putc(c, pc), printf() and baud(). This class maps those calls to the console

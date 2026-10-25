@@ -25,12 +25,9 @@ unsigned long int IP_char2int(unsigned char* IP_char);
 
 void IP_int2char (unsigned long int IP_int, unsigned char* IP_char);
 
-//void init_RTP_filter(void);
 
-//int PS_read_from_ethernet(W5500_chip* W5500);
 int Eth_RX_dequeue (W5500_chip* W5500);
 
-void Eth_pause_frame_TX(unsigned int time);
 
 void IPv4_to_radio (unsigned char* RX_Eth_frame, int size);
 

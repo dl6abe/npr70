@@ -78,26 +78,10 @@ unsigned int virt_EEPROM_write(npr_config* in_data, unsigned int previous_index)
 	return new_index;
 }
 
-//void virt_EEPROM_debug_read(void) {
-//	int i;
-//	unsigned int loc_address;
-//	unsigned char loc_data[260];
-//	FlashIAP my_loc_flash;
-//	my_loc_flash.init();
-//	//for (i=0; i<256; i++) {
-//	for (i=0; i<64; i++) {
-//		//loc_address = NFPR_config_addr_begin + (i & 0xFF)*256;
-//		loc_address = NFPR_config_addr_begin + (i & 0x3F)*256;
-//		my_loc_flash.read(loc_data, loc_address, 256);
-//		HMI_printf("addr:%X data:%02X %02X %02X %02X %02X %02X %02X %02X\r\n", loc_address, loc_data[0], loc_data[1], loc_data[2], loc_data[3], loc_data[4], loc_data[5], loc_data[6], loc_data[7]);
-//	}
-//	my_loc_flash.deinit();
-//}
 
 void virt_EEPROM_errase_all(void) {
 	FlashIAP my_loc_flash;
 	my_loc_flash.init();
-	//my_loc_flash.erase(NFPR_config_addr_begin, 0x10000); //previous config 64kB
 	my_loc_flash.erase(NFPR_config_addr_begin, 0x4000); //config 16kB
 	my_loc_flash.deinit();
 }
@@ -110,8 +94,6 @@ void NFPR_config_read(AnalogIn* analog_pin) {
 		memcpy(&raw_config_data, &NFPR_default_config, 256);
 		//MAC random 2 LSB values
 		raw_config_data.mac_ls_bytes = (NFPR_random_generator(analog_pin) << 8) + NFPR_random_generator(analog_pin);
-		// raw_config_data[9] = raw_config_data[62];//callsign 1st char
-		// raw_config_data[10] = raw_config_data[63];//callsign 2nd char
 		config_index = virt_EEPROM_write (&raw_config_data, config_index);//save the MAC
 	}
 	apply_config_from_raw_string(&raw_config_data);
@@ -133,7 +115,7 @@ unsigned char NFPR_random_generator(AnalogIn* analog_pin) {
 		interm_random = (interm_random & 0x10)>>4;
 		interm_random = (interm_random << i);
 		random_8 = random_8 + interm_random;
-		ThisThread::sleep_for(4);
+		ThisThread::sleep_for(4ms);
 	}
 	return random_8;
 }
@@ -161,7 +143,6 @@ void apply_config_from_raw_string(npr_config* data_r) {
 		CONF_radio_modulation = 24;
 	}
 	CONF_frequency_band = (data_r->modulation & 0xC0) >> 6;
-	//printf("freq_band:%X modul:%i\r\n", CONF_frequency_band, modul_temp);
 	CONF_radio_frequency = data_r->frequency;
 	CONF_radio_network_ID = data_r->radio_network_id;
 	

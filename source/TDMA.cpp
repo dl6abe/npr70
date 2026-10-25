@@ -19,11 +19,12 @@
 #include "mbed.h"
 #include "L1L2_radio.h"
 #include "global_variables.h"
+#include "diag.h"
+#include "diag_core.h"
 
 static unsigned char TDMA_table_uplink_st[radio_addr_table_size];
 static int TDMA_table_uplink_usage[radio_addr_table_size];
 static int TDMA_table_is_fast[radio_addr_table_size];
-//static long int TDMA_table_TA[radio_addr_table_size];
 static unsigned int TDMA_table_RX_time[radio_addr_table_size]; 
 static unsigned char TDMA_table_up2date[radio_addr_table_size];
 static unsigned char TDMA_table_slots[radio_addr_table_size];
@@ -33,7 +34,6 @@ static unsigned char master_allocated_slots;
 static unsigned int slave_alloc_RX_age = 2;
 static unsigned char my_multiframe_mask;
 static unsigned char my_multiframe_ID;
-//static unsigned int TDMA_slave_last_master_top = 0;
 static unsigned int TDMA_offset_multi_frame;
 
 void TDMA_init_all(void) {
@@ -48,7 +48,6 @@ void TDMA_init_all(void) {
 unsigned char TDMA_byte_elaboration(unsigned char synchro) {
 	unsigned char TDMA_byte;
 	unsigned long int uplink_buffer_size;
-	// unsigned long int uplink_buffer_size_temp;
 	if (is_TDMA_master) { // TDMA Master
 		TDMA_byte = 0x40;//uplink/downlink bit
 		TDMA_byte = TDMA_byte + (TDMA_frame_nb & 0x1F);
@@ -58,10 +57,7 @@ unsigned char TDMA_byte_elaboration(unsigned char synchro) {
 	} else { // TDMA client
 		TDMA_byte = 0x00; //uplink/downlink bit
 		// uplink buffer size
-		//uplink_buffer_size_temp = (TXPS_FIFO->last_ready - TXPS_FIFO->RD_point); 
-		//uplink_buffer_size = uplink_buffer_size_temp / 300; //number of frames
 		uplink_buffer_size = compute_TX_buff_size_global();
-		//if ( (uplink_buffer_size_temp % 300) > 0) {uplink_buffer_size++;}
 		if (uplink_buffer_size > 30) {uplink_buffer_size = 30;}
 		TDMA_byte = TDMA_byte + (uplink_buffer_size & 0x1F);
 	}
@@ -72,7 +68,7 @@ unsigned char TDMA_byte_elaboration(unsigned char synchro) {
 	return TDMA_byte;
 }
 
-short int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char TDMA_byte, unsigned char client_byte, int frame_size_loc) {
+int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char TDMA_byte, unsigned char client_byte, int frame_size_loc) {
 	int measured_offset = 0x7FFF;
 	int TA_answer = 0x7FFF;
 	unsigned char client_ID = 0xF0;
@@ -80,12 +76,20 @@ short int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char T
 	
 	is_downlink = TDMA_byte & 0x40; 
 	
+	DIAG_ta_count(DIAG_TA_FRAME);
+	if ( ((TDMA_byte & 0x20) == 0x20) && (is_downlink == 0) ) {
+		DIAG_ta_count(DIAG_TA_SYNC_UP);
+		if ( !((parity_bit_check[TDMA_byte]) && (parity_bit_check[client_byte])) ) {
+			DIAG_ta_count(DIAG_TA_PARITY);
+		}
+	}
 	if ( ((TDMA_byte & 0x20) == 0x20) && (is_downlink == 0) && (parity_bit_check[TDMA_byte]) && (parity_bit_check[client_byte]) ) { //first frame top-synchro
 		client_ID = client_byte & 0x7F;
 		if (CONF_master_FDD == 1) {
 			measured_offset = frame_timer;
 		} else {
-			measured_offset = frame_timer - ((TDMA_slave_last_master_top & 0xFFFFFF));// + 10*TDMA_table_offset[client_ID]);
+			// both are 24 bit timers: the difference is taken modulo 2^24 and sign extended (a wrap of the radio timer between the top stamp and the frame gave -2^24 + TA, issue #48)
+			measured_offset = static_cast<int>((frame_timer - TDMA_slave_last_master_top) << 8) >> 8;
 		}
 		if (frame_size_loc < 114) {
 			measured_offset = measured_offset + (114 - frame_size_loc) * 0.85; 
@@ -94,33 +98,39 @@ short int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char T
 			TA_answer = measured_offset - (10*TDMA_table_offset[client_ID]);
 			if ( (TA_answer > -200) && (TA_answer < 2000) ) {// -1000 .. 5000
 				TDMA_table_TA[client_ID] = 0.9*TDMA_table_TA[client_ID] + 1*TA_answer;
+				G_ta_valid[client_ID] = 1;
+				DIAG_ta_value(DIAG_TA_ACCEPTED, TA_answer, client_ID);
+			} else {
+				DIAG_ta_value((TA_answer <= -200) ? DIAG_TA_BELOW : DIAG_TA_ABOVE, TA_answer, client_ID);
 			}
-			//printf ("id:%i TA_single:%i TA_filt:%i\r\n", client_ID, TA_answer, TDMA_table_TA[client_ID]);
 		}
 		else if (client_ID == 0x7E) {
 			TA_answer = measured_offset - (10*TDMA_offset_multi_frame);
-			//printf ("id:%i TAth:%i\r\n", client_ID, TA_answer);
+			DIAG_ta_count(DIAG_TA_UNCONNECTED);
+		}
+		else {
+			DIAG_ta_count(DIAG_TA_UNKNOWN);
 		}
 	}
-	return (short int)TA_answer;
+	return TA_answer;
 }
 
 void TDMA_init_TA(unsigned char client_ID, int TA_input) {
 	if ( (TA_input > -200) && (TA_input < 2000) ) {
 		TDMA_table_TA[client_ID] = 10*TA_input;
+		G_ta_valid[client_ID] = 1;
 	}
 }
 
 void TDMA_top_measure(void) {
-	TDMA_slave_last_master_top = GLOBAL_timer.read_us();
+	TDMA_slave_last_master_top = TIMER_READ_US(GLOBAL_timer);
 	TDMA_slave_last_master_top = TDMA_slave_last_master_top + 0;
 }
 
 void TDMA_FDD_up_top_measure(void) {
-	TDMA_slave_last_master_top = GLOBAL_timer.read_us();
+	TDMA_slave_last_master_top = TIMER_READ_US(GLOBAL_timer);
 	TDMA_slave_last_master_top = TDMA_slave_last_master_top + 0;
 	RX_top_FDD_up_counter++;
-	//printf("t\r\n");
 }
 
 void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte, unsigned char protocol, unsigned int RX_time) {
@@ -134,7 +144,6 @@ void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte,
 	is_downlink = TDMA_byte & 0x40;
 	client_ID = client_ID_byte & 0x7F;
 	if (parity_bit_check[TDMA_byte]) { // checks parity bit
-	//if(1) {
 		if (is_TDMA_master) { // TDMA Master
 			if (is_downlink == 0) { //only uplink frames
 				uplink_buffer_size = TDMA_byte & 0x1F;
@@ -145,7 +154,6 @@ void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte,
 						TDMA_table_uplink_usage[client_ID] = 32;
 						TDMA_table_is_fast[client_ID] = 1;
 					}
-					//printf("%i upl%i mem%i fast%i\r\n", client_ID, uplink_buffer_size, TDMA_table_uplink_usage[client_ID],TDMA_table_is_fast[client_ID]);
 					if (TDMA_synchro) {
 						TDMA_table_RX_time[client_ID] = RX_time;
 					}
@@ -155,12 +163,11 @@ void TDMA_byte_RX_interp (unsigned char TDMA_byte, unsigned char client_ID_byte,
 			TDMA_frame_nb = TDMA_byte & 0x1F;
 			if ( (TDMA_synchro) && (is_downlink) ) { //(slave_alloc_RX_age < 2) ) {
 				TDMA_slave_last_master_top = RX_time; 
-				//debug_counter ++; 
 				if ( (slave_alloc_RX_age < 2) && (CONF_radio_state_ON_OFF) ) {
 					if ( (TDMA_frame_nb & my_multiframe_mask) == (my_multiframe_ID & my_multiframe_mask) ) {
-						loc_time = GLOBAL_timer.read_us();
+						loc_time = TIMER_READ_US(GLOBAL_timer);
 						time_next_TX_slave = ((RX_time + offset_time_TX_slave) & 0xFFFFFF );//!!!test TA june 2018 +380
-						SI4463_prepa_TX_1_call.attach_us(&SI4463_prepa_TX_1, (time_next_TX_slave - loc_time - CONF_delay_prepTX1_2_TX) &0xFFFFFF  );
+						SI4463_prepa_TX_1_call.attach(&SI4463_prepa_TX_1, std::chrono::microseconds((time_next_TX_slave - loc_time - CONF_delay_prepTX1_2_TX) &0xFFFFFF));
 						slave_alloc_RX_age++;
 						slave_new_burst_tx_pending = 1;
 					}
@@ -180,14 +187,14 @@ void TDMA_get_slave_slot(unsigned int* alloc_age, unsigned char* multiframe_ID, 
 void TDMA_slave_timeout (void) {
 	unsigned int loc_time;
 	unsigned int master_top_age;
-	loc_time = GLOBAL_timer.read_us();
+	loc_time = TIMER_READ_US(GLOBAL_timer);
 	master_top_age = loc_time - TDMA_slave_last_master_top;
 	if ( (master_top_age > (CONF_TDMA_frame_duration + 8000) ) && (master_top_age < (CONF_TDMA_frame_duration + 10000)) ) {
 		if ( (slave_alloc_RX_age < 2) && (slave_new_burst_tx_pending == 0) && (CONF_radio_state_ON_OFF) ) {
 			TDMA_frame_nb = (TDMA_frame_nb+1) & 0x1F;
 			if ( (TDMA_frame_nb & my_multiframe_mask) == (my_multiframe_ID & my_multiframe_mask) ) {
 				time_next_TX_slave = (TDMA_slave_last_master_top + CONF_TDMA_frame_duration + offset_time_TX_slave) & 0xFFFFFF;
-				SI4463_prepa_TX_1_call.attach_us(&SI4463_prepa_TX_1, (time_next_TX_slave - loc_time - CONF_delay_prepTX1_2_TX) &0xFFFFFF  );
+				SI4463_prepa_TX_1_call.attach(&SI4463_prepa_TX_1, std::chrono::microseconds((time_next_TX_slave - loc_time - CONF_delay_prepTX1_2_TX) &0xFFFFFF));
 				slave_alloc_RX_age++;
 				slave_new_burst_tx_pending = 1;
 			}
@@ -204,7 +211,6 @@ void TDMA_master_allocation () {
 	unsigned int loc_time_offset;
 	long int local_TA; 
 	unsigned int downlink_buffer_size;
-	// unsigned int downlink_buffer_size_temp;
 	static unsigned char TDMA_alloc_frame_raw[150];
 	unsigned char rframe_length;
 	unsigned char loc_client_needs[radio_addr_table_size];
@@ -217,15 +223,11 @@ void TDMA_master_allocation () {
 			TDMA_table_uplink_usage[i]--; 
 		}
 	}
-	//if ((TDMA_frame_nb & 0x7) == 0) { // once every 8 frames 
 	if ((TDMA_frame_nb & 0x3) == 0) { // once every 4 frames 
 		TDMA_master_allocation_slow();
 	}
 	// ** TDMA allocation algorithm for fast slots **	
 	// 1) Master computes its own downlink buffer size
-	//downlink_buffer_size_temp = (TXPS_FIFO->last_ready - TXPS_FIFO->RD_point); 
-	//downlink_buffer_size = downlink_buffer_size_temp / 300; //number of frames
-	//if ((downlink_buffer_size_temp % 300) > 0) {downlink_buffer_size++;}
 	downlink_buffer_size = compute_TX_buff_size_global();
 	if (downlink_buffer_size > 30) {downlink_buffer_size = 30;}
 	// 2) if no TDMA uplink received from client, lower its need
@@ -291,7 +293,6 @@ void TDMA_master_allocation () {
 	// 6) timings construction
 	time_max_TX_burst = (CONF_reduced_TDMA_slot_duration + CONF_TDMA_slot_margin) + (master_allocated_slots * CONF_TDMA_slot_duration) + ((master_allocated_slots-1)*CONF_TDMA_slot_margin);// for Master
 	loc_time_offset = time_max_TX_burst + CONF_TDMA_slot_margin + CONF_TR_margain + CONF_TA_margain;
-	//printf("m %i", time_max_TX_burst);
 	for (i=0; i<radio_addr_table_size; i++) {
 		if ( (CONF_radio_addr_table_status[i]) && (TDMA_table_is_fast[i]) ) {
 			local_TA = TDMA_table_TA[i];
@@ -301,10 +302,8 @@ void TDMA_master_allocation () {
 				TDMA_table_offset[i] = (loc_time_offset/10); 
 			}
 			loc_time_offset = loc_time_offset + (TDMA_table_slots[i] * (CONF_TDMA_slot_duration + CONF_TDMA_slot_margin) );
-			//printf("client %i %i %i ", i, TDMA_table_offset[i], TDMA_table_slots[i]*CONF_TDMA_slot_duration);
 		}
 	}
-	//printf("\r\n");
 	//multi frame x4
 	TDMA_offset_multi_frame = loc_time_offset / 10;
 	for (i=0; i<4; i++) {
@@ -337,7 +336,6 @@ void TDMA_master_allocation () {
 	for (i=0; i<radio_addr_table_size; i++) {
 		if (CONF_radio_addr_table_status[i]) { // client "i" is active
 			if (TDMA_table_is_fast[i]==1) { // inside fast slot
-			//if (1) {
 				TDMA_alloc_frame_raw[size_wo_FEC] = i; // client ID
 				size_wo_FEC++;
 				TDMA_alloc_frame_raw[size_wo_FEC] = TDMA_table_offset[i] & 0xFF; // time offset LSB
@@ -357,7 +355,6 @@ void TDMA_master_allocation () {
 				size_wo_FEC++;
 				TDMA_alloc_frame_raw[size_wo_FEC] = 1; // TDMA slot length (4xLSb) and power (MSb)
 				size_wo_FEC++;
-				//TDMA_alloc_frame_raw[size_wo_FEC] = 0x30 + (i & 0x0F); //multi frame period (4xMSb) ID multi frame (4xLSb)
 				TDMA_alloc_frame_raw[size_wo_FEC] = 0x20 + (i & 0x03); //multi frame period (4xMSb) ID multi frame (4xLSb)
 				size_wo_FEC++;
 			}
@@ -372,7 +369,6 @@ void TDMA_master_allocation () {
 	size_wo_FEC++;
 	TDMA_alloc_frame_raw[size_wo_FEC] = 1; // TDMA slot length (4xLSb) and power (MSb)
 	size_wo_FEC++;
-	//TDMA_alloc_frame_raw[size_wo_FEC] = 0x37; //multi frame period=3 (4xMSb); ID multi frame=7 (4xLSb)
 	TDMA_alloc_frame_raw[size_wo_FEC] = 0x23; //multi frame period=2 (4xMSb); ID multi frame=7 (4xLSb)
 	size_wo_FEC++;
 	//END
@@ -411,18 +407,12 @@ void TDMA_NULL_frame_init(int size) {
 	unsigned char rframe_length;
 	null_frame[0] = my_radio_client_ID + parity_bit_elab[my_radio_client_ID & 0x7F]; // address = client, the ID is 0x7E or 0xFE before the connection
 	null_frame[1] = 0x00; // protocol = NULL frame
-	//size_wo_FEC = 70;
 	size_wo_FEC = size;
 	size_w_FEC = size_w_FEC_compute (size_wo_FEC);
 	rframe_length = size_w_FEC + 1 - SI4463_offset_size;
-	//TX_signaling_TDMA->data[0] = 0; // timer, date for later use
 	TX_TDMA_intern_data[0] = 0;
-	//TX_signaling_TDMA->data[1] = rframe_length; // length
-	//TX_signaling_TDMA->WR_point = 3; 
 	TX_TDMA_intern_data[1] = rframe_length;
-	//size_w_FEC = FEC_encode(null_frame, TX_signaling_TDMA, size_wo_FEC);
 	size_w_FEC = FEC_encode2(null_frame, TX_TDMA_intern_data+3, size_wo_FEC);//+3: timer, size, tdma
-	//TX_signaling_TDMA->last_ready = TX_signaling_TDMA->WR_point;
 }
 
 
@@ -432,7 +422,6 @@ void TDMA_slave_alloc_exploitation(unsigned char* unFECdata, int unFECsize) {
 	int i;
 	unsigned char loc_client_ID;
 	unsigned char loc_TDMA_slot_length;
-	// unsigned char loc_power;
 	unsigned long int loc_TDMA_offset;
 	i=2; //1st byte: client ID, 2nd byte:protocol
 	loc_client_ID = unFECdata[2];
@@ -440,19 +429,11 @@ void TDMA_slave_alloc_exploitation(unsigned char* unFECdata, int unFECsize) {
 		if (loc_client_ID == my_radio_client_ID) {
 			loc_TDMA_offset = ( unFECdata[i+1] + (unFECdata[i+2]<<8) )*10;
 			offset_time_TX_slave = loc_TDMA_offset; 
-			//printf("offset:%i\r\n",loc_TDMA_offset);
 			loc_TDMA_slot_length = 0x0F & unFECdata[i+3];
 			time_max_TX_burst = (loc_TDMA_slot_length * CONF_TDMA_slot_duration) + ( (loc_TDMA_slot_length-1) *CONF_TDMA_slot_margin );
 			my_multiframe_ID = 0x0F & unFECdata[i+4];
 			my_multiframe_mask = (0xF0 & unFECdata[i+4]) >> 4;
 			my_multiframe_mask = LUT_multif_mask[my_multiframe_mask];
-			// loc_power = ( 0xF0 & unFECdata[i+3] ) >> 4;
-			//printf("TDMAf:");
-			//for (j=0; j< 5; j++) {
-			//	printf(" %02X", unFECdata[i+j]);
-			//}
-			//printf ("\r\n");
-			//printf ("offs:%i length:%i multi_ID:%i multi_period:%i\r\n", offset_time_TX_slave, time_max_TX_burst, my_multiframe_ID, my_multiframe_period);
 			slave_alloc_RX_age = 0;
 		}
 		i=i+5;

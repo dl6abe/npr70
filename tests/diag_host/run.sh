@@ -4,7 +4,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-c++ -std=gnu++11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -I"$here/../../source" \
+trap '[ -n "${NPR_KEEP_WORK:-}" ] && cp -R "$work" "$NPR_KEEP_WORK/$(basename "$here")"; rm -rf "$work"' EXIT   # tools/coverage.sh keeps the work dir
+c++ -std=gnu++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -I"$here/../../source" \
     -o "$work/diag" "$here/driver.cpp" 2>"$work/build.log" || { cat "$work/build.log"; exit 1; }
 "$work/diag" && echo "diag host test OK" || { echo "diag host test FAILED"; exit 1; }

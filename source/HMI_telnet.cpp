@@ -30,7 +30,6 @@
 #include "L1L2_radio.h"
 
 static char current_rx_line[100];
-//static char HMI_out_str[100];
 static int current_rx_line_count = 0;
 static int rx_line_too_long = 0; // set when printable characters were dropped because the line buffer is full
 static int is_telnet_opened = 0;
@@ -60,20 +59,14 @@ int telnet_loop (W5500_chip* W5500) {
 	result=0;
 	
 	current_state = W5500_read_byte(W5500, W5500_Sn_SR, TELNET_SOCKET);
-	//printf("state: %x\r\n", current_state);
 	if ((current_state == W5500_SOCK_ESTABLISHED) && (previous_state != W5500_SOCK_ESTABLISHED)) {
 		W5500_read_long(W5500, W5500_Sn_DIPR0, TELNET_SOCKET, RX_data, 7);
 		// Note: RX_data starts with 3 extra bytes (W5500 register that was read) that we don't want
 		printf("\r\n\r\nnew telnet connexion from %i.%i.%i.%i\r\nserial inactive...\r\n", RX_data[3], RX_data[4], RX_data[5], RX_data[6]);
 		fflush(stdout);
-		//TX_data[0] = 0xFF; //IAC
-		//TX_data[1] = 0xFB; //WILL FB DO FD
-		//TX_data[2] = 1; //echo 1 RTCE 7
-		//TX_data[3] = 0;
 		TX_data[0] = 0xFF; //IAC
 		TX_data[1] = 0xFB; //WILL 
 		TX_data[2] = 0x01; //Echo
-		//TX_data[3] = 0;
 		TX_data[3] = 0xFF; //IAC
 		TX_data[4] = 0xFD; //DO
 		TX_data[5] = 0x03; //Suppr GA 
@@ -83,7 +76,6 @@ int telnet_loop (W5500_chip* W5500) {
 		TX_data[9] = 0;
 		strcat((char*)TX_data, "NPR modem\r\nready> ");
 		W5500_write_TX_buffer (W5500, TELNET_SOCKET, TX_data, 27, 0); //27
-		//HMI_printf("ready>");
 		is_telnet_opened = 1;
 		iac_state = 0;
 		rx_line_too_long = 0;
@@ -91,7 +83,7 @@ int telnet_loop (W5500_chip* W5500) {
 		echo_ON = 1;
 		display_status_ongoing = 0;
 		display_who_ongoing = 0;
-		telnet_last_activity = GLOBAL_timer.read_us();
+		telnet_last_activity = TIMER_READ_US(GLOBAL_timer);
 	}
 	
 	if (current_state == W5500_SOCK_WAIT) { // close wait to close 
@@ -107,20 +99,17 @@ int telnet_loop (W5500_chip* W5500) {
 	
 	if (current_state == W5500_SOCK_CLOSED) { //closed to open
 		W5500_write_byte(W5500, W5500_Sn_CR, TELNET_SOCKET, 0x01); 
-		//printf("open \r\n");
 		result=1;
 	}
 	
 	if (current_state == W5500_SOCK_INIT) { //opened to listen
 		W5500_write_byte(W5500, W5500_Sn_CR, TELNET_SOCKET, 0x02); 
-		//printf("listen \r\n");
 	}
 	previous_state = current_state;
 	if (is_telnet_opened) {
 		RX_size = W5500_read_received_size(W5500, TELNET_SOCKET); 
-		timer_snapshot = GLOBAL_timer.read_us();
+		timer_snapshot = TIMER_READ_US(GLOBAL_timer);
 		if ((timer_snapshot - telnet_last_activity) > 300000000) { //300000000
-			//HMI_printf("Telnet inactivity timeout. Force exit.\r\n");
 			W5500_write_byte(W5500_p1, W5500_Sn_CR, TELNET_SOCKET, 0x08); //close TCP
 			is_telnet_opened = 0;
 			echo_ON = 1;
@@ -135,9 +124,8 @@ int telnet_loop (W5500_chip* W5500) {
 		RX_size = 97; // RX_data holds 3 header bytes plus the data, the rest is read in the next call
 	}
 	if (RX_size > 0) {
-		telnet_last_activity = GLOBAL_timer.read_us();
+		telnet_last_activity = TIMER_READ_US(GLOBAL_timer);
 		result=1;
-		// printf("RX Size: %i\r\n", RX_size);
 		W5500_read_RX_buffer(W5500, TELNET_SOCKET, RX_data, RX_size+3);
 		// Note: RX_data starts with three extra bytes (W5500 register/block info) that are not
 		// part of the actual received data
@@ -158,7 +146,6 @@ int telnet_loop (W5500_chip* W5500) {
 				i++;
 				continue;
 			}
-			// printf("%02X %c\r\n", loc_char, loc_char);
 			if ( (loc_char >= 0x20) && (loc_char <= 0x7E) ) {//displayable char
 				if ( (current_rx_line_count < 98) && (echo_ON) ) {
 					TX_data[j]=RX_data[i];
@@ -208,7 +195,6 @@ int telnet_loop (W5500_chip* W5500) {
 				}
 				else if (loc_char == 0x03) { //ctrl + C
 					HMI_cancel_current();
-					//printf("CTRL + C\r\n");
 					i++;
 				} else {
 					i++;
@@ -218,7 +204,6 @@ int telnet_loop (W5500_chip* W5500) {
 		if (j > 0) {
 			W5500_write_TX_buffer (W5500, TELNET_SOCKET, TX_data, j, 0);
 		}
-		//printf("\r\n");
 	}
 	return result;
 }
@@ -272,6 +257,15 @@ int serial_term_loop (void) {
 }
 
 static void HMI_print_help(void);
+// "23.1 km" or, before the master accepted a measurement for the client, "n/a" (a raw 0 is the start value, issue #47)
+static void HMI_ta_text(char* out, size_t size, float km, int valid, const char* unit) {
+	if (valid) {
+		snprintf(out, size, "%.1f%s", km, unit);
+	} else {
+		snprintf(out, size, "n/a");
+	}
+}
+
 static void HMI_debug_command(void);
 static void HMI_save_command(void);
 
@@ -287,11 +281,14 @@ static void HMI_print_help(void) {
 	HMI_printf("  radio on|off        switch the radio\r\n");
 	HMI_printf("  status              live link status, Ctrl+C to leave\r\n");
 	HMI_printf("  who                 live master and client list, Ctrl+C to leave\r\n");
-	HMI_printf("  clear stats         set the received frame counters back to 0\r\n");
+	HMI_printf("  clear stats         set the received frame counters and the buffer levels back to 0\r\n");
 	HMI_printf("  TX_test <seconds>   transmit test, the radio must be off\r\n");
 	HMI_printf("  version             firmware version and band\r\n");
 	HMI_printf("  uptime              time since the start of the modem\r\n");
 	HMI_printf("  stack               stack and heap use (highest values)\r\n");
+	HMI_printf("  buffers             highest fill of the big buffers (FIFOs, Ethernet buffer)\r\n");
+	HMI_printf("  ta                  statistics of the TA measurement at the master (accepted, dropped, raw values)\r\n");
+	HMI_printf("  txlat               time from the call of prepa_TX_1 (and the master top) to the start of a transmission\r\n");
 	HMI_printf("  latency [start|stop|clear]  jitter of the 1 ms Ticker callback\r\n");
 	HMI_printf("  phy                 Ethernet PHY status (debug), 'phy reset', 'phy mode <0-5|7>'\r\n");
 	HMI_printf("  debug               everything for a fault report in one output (no live display)\r\n");
@@ -418,7 +415,6 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			command_understood = 1;
 		}
 		if (strcmp(loc_command_str, "who") == 0) {
-			//HMI_print_who();
 			command_understood = 1;
 			display_who_ongoing = 1;
 			slow_counter = 0;
@@ -445,7 +441,8 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 			command_understood = 1;
 			if ( (loc_param1_str != NULL) && (strcmp(loc_param1_str, "stats") == 0) ) {
 				radio_clear_fec_stats();
-				HMI_printf("received frame counters cleared\r\nready> ");
+				DIAG_buf_clear();
+				HMI_printf("received frame counters, buffer levels and transmit start times cleared\r\nready> ");
 			} else {
 				HMI_printf("ERROR: use 'clear stats'.\r\nready> ");
 			}
@@ -458,6 +455,18 @@ void HMI_line_parse (char* RX_text, int RX_text_count) {
 		if (strcmp(loc_command_str, "stack") == 0) {
 			command_understood = 1;
 			DIAG_stack_print();
+		}
+		if (strcmp(loc_command_str, "buffers") == 0) {
+			command_understood = 1;
+			DIAG_buffers_print();
+		}
+		if (strcmp(loc_command_str, "ta") == 0) {
+			command_understood = 1;
+			DIAG_ta_print();
+		}
+		if (strcmp(loc_command_str, "txlat") == 0) {
+			command_understood = 1;
+			DIAG_txlat_print();
 		}
 		if (strcmp(loc_command_str, "latency") == 0) {
 			command_understood = 1;
@@ -517,24 +526,23 @@ void HMI_TX_test(char* duration_txt) {
 		sscanf (duration_txt, "%i", &duration);
 		HMI_printf("reconfiguring radio...\r\n");
 		SI4463_configure_all();
-		ThisThread::sleep_for(50);
+		ThisThread::sleep_for(50ms);
 		TDMA_init_all();
-		//SI4463_radio_start();
 		
-		ThisThread::sleep_for(1);
+		ThisThread::sleep_for(1ms);
 		G_SI4463->RX_TX_state = 0;
 		SI4463_clear_IT(G_SI4463, 0, 0);
-		ThisThread::sleep_for(10);
+		ThisThread::sleep_for(10ms);
 		CONF_radio_state_ON_OFF = 1;
 		SI4463_TX_to_RX_transition();
 		
-		ThisThread::sleep_for(10);
+		ThisThread::sleep_for(10ms);
 		CONF_radio_state_ON_OFF = 0;
 		if (!is_TDMA_master) {
 			my_client_radio_connexion_state = 1;
 			my_radio_client_ID = 0x7E;
 		}
-		ThisThread::sleep_for(50);
+		ThisThread::sleep_for(50ms);
 		
 		TDMA_NULL_frame_init(70);
 		HMI_printf("radio transmit test %i seconds...\r\n", duration);
@@ -550,7 +558,6 @@ void HMI_reboot(void) {
 	if (is_telnet_opened == 1) {
 		W5500_write_byte(W5500_p1, 0x0001, TELNET_SOCKET, 0x08);
 	}
-	//extern "C" void mbed_reset();
 	NVIC_SystemReset();
 }
 
@@ -558,8 +565,6 @@ void HMI_force_exit(void) {
 	unsigned char IP_loc[8];
 	if (is_telnet_opened == 1) {
 		IP_int2char (LAN_conf_applied.LAN_modem_IP, IP_loc);
-		//HMI_printf("\r\n\r\n\r\nNew IP config... force telnet exit.\r\n");
-		//HMI_printf("\r\n\r\nNew IP config. Open new telnet session with: %i.%i.%i.%i\r\n\r\n", IP_loc[0], IP_loc[1], IP_loc[2], IP_loc[3]);
 		W5500_write_byte(W5500_p1, 0x0001, TELNET_SOCKET, 0x08); //close TCP
 		is_telnet_opened = 0;
 		echo_ON = 1;
@@ -584,7 +589,6 @@ void HMI_exit(void) {
 }
 
 static char HMI_yes_no[2][4]={'n','o',0,0, 'y','e','s',0};
-// static char HMI_trans_modes[2][4]={'I','P',0,0,'E','t','h',0};
 static char HMI_master_FDD[3][5]={'n','o',0,0,0,'d','o','w','n',0,'u','p',0,0,0};
 
 static void HMI_config_lines(void) {
@@ -641,7 +645,7 @@ static void HMI_debug_command(void) {
 	unsigned char mf_ID, mf_mask;
 	int since_request, since_ack;
 	unsigned long int up;
-	now_us = GLOBAL_timer.read_us();
+	now_us = TIMER_READ_US(GLOBAL_timer);
 	up = snmp_uptime_seconds();
 	HMI_printf("== debug ==\r\n");
 	HMI_printf(FW_BANNER_FORMAT "freq band: %s\r\n", FW_VERSION, MBED_OS_VERSION, snmp_reset_reason_text(G_reset_reason), FREQ_BAND);
@@ -678,7 +682,9 @@ static void HMI_debug_command(void) {
 			if (CONF_radio_addr_table_status[i]) {
 				IP_int2char(CONF_radio_addr_table_IP_begin[i], IP_c);
 				HMI_printf("ID %u %s status %i IP %i.%i.%i.%i size %lu\r\n", i, CONF_radio_addr_table_callsign[i] + 2, (int)CONF_radio_addr_table_status[i], IP_c[0], IP_c[1], IP_c[2], IP_c[3], CONF_radio_addr_table_IP_size[i]);
-				HMI_printf("  last ACK %u s ago, TA %.1f km, RSSI %.1f dBm, ERR %.2f %%\r\n", (now_us - CONF_radio_addr_table_date[i]) / 1000000, 0.15 * (float)(TDMA_table_TA[i] / 10), (float)(G_radio_addr_table_RSSI[i] >> 8) / 2 - 136, ((float)G_radio_addr_table_BER[i]) / 500);
+				char ta_txt[16];
+				HMI_ta_text(ta_txt, sizeof(ta_txt), 0.15 * (float)(TDMA_table_TA[i] / 10), G_ta_valid[i], " km");
+				HMI_printf("  last ACK %u s ago, TA %s, RSSI %.1f dBm, ERR %.2f %%\r\n", (now_us - CONF_radio_addr_table_date[i]) / 1000000, ta_txt, (float)(G_radio_addr_table_RSSI[i] >> 8) / 2 - 136, ((float)G_radio_addr_table_BER[i]) / 500);
 				HMI_printf("  FEC ok %u fixed %u lost %u\r\n", G_rx_fec_client_ok[i], G_rx_fec_client_fixed[i], G_rx_fec_client_lost[i]);
 			}
 		}
@@ -1157,7 +1163,7 @@ void HMI_print_who(void) {
 	IP_int2char (LAN_conf_applied.LAN_modem_IP, IP_c);
 	HMI_printf ("ME: Callsign:%s ID:%i modem IP:%i.%i.%i.%i\r\n", CONF_radio_my_callsign+2, my_radio_client_ID, IP_c[0], IP_c[1], IP_c[2], IP_c[3]);
 	HMI_printf ("Clients:\r\n");
-	timer_snapshot = GLOBAL_timer.read_us();
+	timer_snapshot = TIMER_READ_US(GLOBAL_timer);
 	for (i=0; i<radio_addr_table_size; i++) {
 		
 	}
@@ -1165,7 +1171,6 @@ void HMI_print_who(void) {
 		loc_age = timer_snapshot - CONF_radio_addr_table_date[i];
 		loc_age = loc_age / 1000000;
 		if (is_TDMA_master) {loc_age = 0;} // master : already timeout in state machine
-		//printf ("age:%i ", loc_age);
 		if ( (CONF_radio_addr_table_status[i]) && (loc_age < connexion_timeout) ) {
 			HMI_printf (" ID:%i Callsign:%s ", i, CONF_radio_addr_table_callsign[i]+2);
 			IP_int2char (CONF_radio_addr_table_IP_begin[i], IP_c);
@@ -1182,10 +1187,12 @@ void HMI_print_who(void) {
 				loc_RSSI = (float)G_radio_addr_table_RSSI[i];
 				loc_TA = (float)TDMA_table_TA[i];
 			}
+			char who_ta[16];
+			HMI_ta_text(who_ta, sizeof(who_ta), 0.15*loc_TA, (!is_TDMA_master) || G_ta_valid[i], "km");
 			if (loc_RSSI > 0) {
-				HMI_printf ("TA:%.1fkm RSSI:%.1fdBm ERR:%.2f%% ", 0.15*loc_TA, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
+				HMI_printf ("TA:%s RSSI:%.1fdBm ERR:%.2f%% ", who_ta, loc_RSSI/2-136, ((float)G_radio_addr_table_BER[i])/500);
 			} else { // no measurement yet, a raw 0 would read as -136 dBm
-				HMI_printf ("TA:%.1fkm RSSI:n/a ERR:%.2f%% ", 0.15*loc_TA, ((float)G_radio_addr_table_BER[i])/500);
+				HMI_printf ("TA:%s RSSI:n/a ERR:%.2f%% ", who_ta, ((float)G_radio_addr_table_BER[i])/500);
 			}
 			if (is_TDMA_master) { // frames received from this client: ok / repaired / lost
 				HMI_printf ("FEC ok:%u fixed:%u lost:%u\x1b[K\r\n", G_rx_fec_client_ok[i], G_rx_fec_client_fixed[i], G_rx_fec_client_lost[i]);
@@ -1236,10 +1243,6 @@ void HMI_print_status(void) {
 	temp_string[16]=0x5B;
 	temp_string[17]=0x41;
 	temp_string[18]=0x00;
-	//temp_string[15]=0x1B;
-	//temp_string[16]=0x5B;
-	//temp_string[17]=0x41;
-	//temp_string[18]=0x00;
 	if (slow_counter == 0) { temp_string[0] = 0; }
 	if (is_TDMA_master) {
 		loc_downlink_bw = G_uplink_bandwidth_temp * 0.004;
@@ -1263,16 +1266,13 @@ void HMI_print_status(void) {
 	} else {
 		HMI_printf("%s   %i status: %s TA:%.1fkm Temp:%idegC   \r\n", temp_string, slow_counter, text_radio_status[(my_client_radio_connexion_state < 6) ? my_client_radio_connexion_state : 0], 0.15*(float)TA_loc, G_temperature_SI4463);
 	}
-	//HMI_printf("   TX buff filling %i\r\n", (TX_buff_ext_WR_pointer - TX_buff_ext_RD_pointer)*128);//!!!test
 	if ( (is_TDMA_master) && (CONF_master_FDD == 2) ) {
 		HMI_printf("   RX tops from master FDD down %i\r\n", RX_top_FDD_up_counter);
 	} else {
 		HMI_printf("   RX_Eth_IPv4 %i ;TX_radio_IPv4 %i ; RX_radio_IPv4 %i   \r\n", RX_Eth_IPv4_counter, TX_radio_IPv4_counter, RX_radio_IPv4_counter);
-		//HMI_printf("   RX_Eth_IPv4 %i ;TX_radio_IPv4 %i ; RX_radio_IPv4 %i   \r\n", RX_Eth_IPv4_counter, TX_radio_IPv4_counter, (TX_buff_ext_WR_pointer - TX_buff_ext_RD_pointer)*128);//!!!! debug FIFO filling
 	}
 	HMI_printf("   RX frames FEC ok:%u fixed:%u lost:%u seg_gap:%u   \r\n", G_rx_fec_ok, G_rx_fec_fixed, G_rx_fec_lost, G_rx_seg_gap);
 	if ( (!is_TDMA_master) && (RSSI_stat_pkt_nb > 0) ) {
-		//HMI_printf("RSSI: %i\r\nCTRL+c to exit...\r\n", (RSSI_total_stat / RSSI_stat_pkt_nb) );
 		HMI_printf("   DOWNLINK - bandwidth:%.1f RSSI:%.1f ERR:%.2f%%    \r\n", loc_downlink_bw, ((float)G_downlink_RSSI/256/2-136), ((float)G_downlink_BER)/500); // /500
 		RSSI_total_stat = 0;
 		RSSI_stat_pkt_nb = 0;

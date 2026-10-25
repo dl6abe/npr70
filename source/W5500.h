@@ -93,11 +93,9 @@ uint8_t W5500_read_byte(W5500_chip* SPI_p_loc, unsigned int W5500_addr, unsigned
 
 void W5500_write_byte(W5500_chip* SPI_p_loc, unsigned int W5500_addr, unsigned char bloc_addr, unsigned char data);
 
-void W5500_Phy_off_2sec(W5500_chip* SPI_p_loc);
 
 uint16_t W5500_read_received_size(W5500_chip* SPI_p_loc, uint8_t sock_nb);
 
-int W5500_read_TX_free_size(W5500_chip* SPI_p_loc, uint8_t sock_nb);
 
 void W5500_read_RX_buffer(W5500_chip* SPI_p_loc, uint8_t sock_nb,  uint8_t* data, int size);
 
@@ -109,13 +107,11 @@ void W5500_write_TX_buffer(W5500_chip* SPI_p_loc, uint8_t sock_nb, unsigned char
 
 void W5500_re_configure (unsigned char why = 0); // why: bit mask of the changed LAN parameters (see signaling.cpp), 0 = other
 
-void W5500_re_configure_gateway(W5500_chip* SPI_p_loc);
 
 void W5500_re_configure_periodic_call(W5500_chip* SPI_p_loc);
 
 // Debug of the Ethernet PHY (command 'phy'): link tracking and a PHY reset without blocking
 void W5500_link_poll(W5500_chip* SPI_p_loc);
-unsigned char W5500_link_phycfgr(void);       // last PHYCFGR value read by W5500_link_poll
 unsigned int W5500_link_changes(void);        // number of link up/down changes since start
 unsigned int W5500_link_last_change_s(void);  // seconds since start at the last change
 void W5500_phy_reset_start(void);             // PHY reset, released about 300 ms later by W5500_link_poll

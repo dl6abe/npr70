@@ -37,18 +37,6 @@ static unsigned char DHCP_ARP_status[DHCP_ARP_tab_size];	//		DHCP						ARP
 															// 3:	prefered but not allocated	Timeout_1
 static unsigned int DHCP_ARP_date[DHCP_ARP_tab_size];
 
-int compare_IP(unsigned char* IP1, unsigned char* IP2) {
-	int result;
-	int i;
-	result = 1;
-	for (i=0; i<4; i++) {
-		if (IP1[i] != IP2[i]) {
-			result = 0;
-		}
-	}
-	return result;
-}
-
 int compare_MAC(unsigned char* MAC1, unsigned char* MAC2) {
 	int result;
 	int i;
@@ -137,7 +125,7 @@ static void DHCP_store_entry(unsigned char* client_MAC, unsigned char* IP, unsig
 	}
 	if (free_DHCP_slot!=255) {
 		DHCP_ARP_status[free_DHCP_slot] = status;
-		if (status == 2) {DHCP_ARP_date[free_DHCP_slot] = GLOBAL_timer.read_us();}
+		if (status == 2) {DHCP_ARP_date[free_DHCP_slot] = TIMER_READ_US(GLOBAL_timer);}
 		DHCP_ARP_IP[free_DHCP_slot] = IP_char2int(IP);
 		for (i=0; i<6; i++) {
 			DHCP_ARP_MAC[free_DHCP_slot][i] = client_MAC[i];
@@ -170,7 +158,7 @@ int lookfor_free_LAN_IP (LAN_conf_T* LAN_config, unsigned char* client_MAC, unsi
 		}
 		if (req_type==3) {
 			DHCP_ARP_status[i_previous_alloc] = 2;
-			DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
+			DHCP_ARP_date[i_previous_alloc] = TIMER_READ_US(GLOBAL_timer);
 		}
 	}
 	// 1.3) check if requested IP agreed : inside range, and 1.4) free (not allocated to another MAC)
@@ -208,7 +196,7 @@ int lookfor_free_LAN_IP (LAN_conf_T* LAN_config, unsigned char* client_MAC, unsi
 			proposed_IP [i] = requested_IP[i]; 
 		}
 		if (req_type == 3) { 
-			DHCP_ARP_date[i_previous_alloc] = GLOBAL_timer.read_us();
+			DHCP_ARP_date[i_previous_alloc] = TIMER_READ_US(GLOBAL_timer);
 		}
 		DHCP_ARP_status [i_previous_alloc] = new_status;
 		answer = 1;
@@ -390,7 +378,7 @@ void DHCP_ARP_print_entries(void) {
 			HMI_printf("%02X:", DHCP_ARP_MAC[i][3]);
 			HMI_printf("%02X:", DHCP_ARP_MAC[i][4]);
 			HMI_printf("%02X ", DHCP_ARP_MAC[i][5]);
-			HMI_printf("age:%isec\r\n", (GLOBAL_timer.read_us()-DHCP_ARP_date[i])/1000000);
+			HMI_printf("age:%isec\r\n", (TIMER_READ_US(GLOBAL_timer)-DHCP_ARP_date[i])/1000000);
 		}
 	}
 	HMI_printf("\r\nready> ")
@@ -456,7 +444,6 @@ void ARP_proxy (unsigned char* ARP_req_packet, int size) {
 		for (i=0; i<6; i++) {				// ARP Sender MAC
 			ARP_answ_packet[i+22] = CONF_modem_MAC[i];
 		}
-		//IP_int2char (LAN_config.LAN_modem_IP, (ARP_answ_packet + 28) ); // ARP sender IP
 		IP_int2char (ARP_requested_IP, (ARP_answ_packet + 28) ); // ARP sender IP
 		for (i=0; i<6; i++) {				// ARP Target MAC
 			ARP_answ_packet[i+32] = ARP_client_MAC[i];
@@ -509,22 +496,19 @@ void ARP_client_answer_treatment (unsigned char* ARP_RX_packet, int size) {
 	}
 	if (ARP_target_IP == LAN_conf_applied.LAN_modem_IP) { //if ARP reply is for us
 		//first look for existing entry
-		//printf("ARP reply is for us IP %X\r\n", ARP_sender_IP);
 		entry_already_exists = 0;
 		for (i=0; i<DHCP_ARP_tab_size; i++) {
 			if (DHCP_ARP_IP[i] == ARP_sender_IP) {
 				entry_already_exists = 1;
 				i_existing_entry = i;
-				//printf ("matches %i\r\n", i);
 			}
 		}
 		if (entry_already_exists == 1) { // replace existing entry
-			//printf("ARP entry already exists %i\r\n", i_existing_entry);
 			for (i=0; i<6; i++) {
 				DHCP_ARP_MAC[i_existing_entry][i] = ARP_sender_MAC[i];
 			}
 			DHCP_ARP_status[i_existing_entry] = 2; // valid entry
-			DHCP_ARP_date[i_existing_entry] = GLOBAL_timer.read_us();
+			DHCP_ARP_date[i_existing_entry] = TIMER_READ_US(GLOBAL_timer);
 		} 
 		else { // no entry, lookfor empty slot
 			for (i=DHCP_ARP_tab_size-1; i>=0; i--) {
@@ -538,7 +522,7 @@ void ARP_client_answer_treatment (unsigned char* ARP_RX_packet, int size) {
 				}
 				DHCP_ARP_status[i_free_entry] = 2; // valid entry
 				DHCP_ARP_IP[i_free_entry] = ARP_sender_IP;
-				DHCP_ARP_date[i_free_entry] = GLOBAL_timer.read_us();
+				DHCP_ARP_date[i_free_entry] = TIMER_READ_US(GLOBAL_timer);
 			}
 		}
 	}
@@ -556,19 +540,15 @@ void ARP_RX_packet_treatment (unsigned char* ARP_RX_packet, int size) {
 	ARP_protocol_type = ARP_RX_packet[16]*0x100 + ARP_RX_packet[17];
 	ARP_opcode = ARP_RX_packet[20]*0x100 + ARP_RX_packet[21];
 	if ( (ARP_protocol_type == 0x0800) && (ARP_opcode == 0x0001) ) { // request
-		//printf ("ARP request\r\n");
 		ARP_sender_IP = IP_char2int (ARP_RX_packet+28);
 		ARP_target_IP = IP_char2int (ARP_RX_packet+38);
 		if (ARP_sender_IP != ARP_target_IP) {//ignores gratuitous ARP request
-			//printf ("real ARP request\r\n");
 			ARP_proxy(ARP_RX_packet, size);
 		}
 		else {
-			//printf ("gratuitous!\r\n");
 		}
 	}
 	if ( (ARP_protocol_type == 0x0800) && (ARP_opcode == 0x0002) ) { // reply
-		//printf ("ARP reply\r\n");
 		if ( (LAN_conf_applied.DHCP_server_active == 0) || (is_TDMA_master) ){//only active if modem is no DHCP server
 			ARP_client_answer_treatment (ARP_RX_packet, size);
 		}
@@ -579,7 +559,7 @@ void DHCP_ARP_periodic_free_table () {
 	int i;
 	unsigned int loc_age;
 	for (i=0; i<DHCP_ARP_tab_size; i++) {
-		loc_age = GLOBAL_timer.read_us() - DHCP_ARP_date[i];
+		loc_age = TIMER_READ_US(GLOBAL_timer) - DHCP_ARP_date[i];
 		if ( (DHCP_ARP_status[i] == 2) && (loc_age > 1000000 * DHCP_ARP_timeout) ) {
 			DHCP_ARP_status[i] = 3;
 		}
@@ -614,7 +594,7 @@ int lookfor_MAC_from_IP (unsigned char* MAC_out, unsigned long int IP_addr) {
 			}
 		}
 		if (i_found < DHCP_ARP_tab_size) { // existing entry
-			age_loc = GLOBAL_timer.read_us() - DHCP_ARP_date[i_found];
+			age_loc = TIMER_READ_US(GLOBAL_timer) - DHCP_ARP_date[i_found];
 			age_loc = age_loc / 1000000;
 			if (age_loc < (DHCP_ARP_timeout / 2) ) {
 				for (i=0; i<6; i++) {

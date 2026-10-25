@@ -130,27 +130,6 @@ static const dataEntryType snmpData[] =
 
 const uint8_t maxData = (sizeof(snmpData) / sizeof(dataEntryType));
 
-void hexdump(uint8_t *buffer, uint16_t len)
-{
-    int i;
-
-    if (len == 0)
-    {
-        printf("  ZERO LENGTH\r\n");
-        return;
-    }
-
-    for (i = 0; i < len; i++)
-    {
-        if ((i % 16) == 0)
-        {
-            printf("\r\n");
-        }
-        printf(" %02x", buffer[i]);
-    }
-    printf("\r\n");
-}
-
 // Names for G_reset_reason, set at start from the reset flags of the MCU
 static const char* const reset_reason_names[] = {
     "unknown", "power-on", "pin", "software", "iwdg", "wwdg", "low-power", "option-bytes"
@@ -333,21 +312,6 @@ int8_t getOID(int8_t id, uint8_t *oid, uint8_t *len)
     }
 
     return SNMP_SUCCESS;
-}
-
-int32_t getValue(uint8_t *vptr, int32_t vlen)
-{
-    int32_t index = 0;
-    int32_t value = 0;
-
-    while (index < vlen)
-    {
-        if (index != 0)
-            value <<= 8;
-        value |= vptr[index++];
-    }
-
-    return value;
 }
 
 // snmpData is read-only and lives in flash. The value of an entry that has a getter is built in
@@ -716,7 +680,6 @@ void snmp_loop(W5500_chip *W5500)
             // Shorter than the W5500 UDP header: nothing to parse (and the length below would wrap)
             return;
         }
-        //hexdump(request_msg.buffer, request_msg.len);
 
         // Extract the caller's IP and source port for our reply:
         for (int i=0;i<6;i++) {
@@ -739,8 +702,6 @@ void snmp_loop(W5500_chip *W5500)
         ret = parse_snmp();
         if (ret > -1)
         {
-            // printf("Sending response to valid query\r\n");
-            // hexdump(response_msg.buffer, response_msg.index);
             W5500_write_TX_buffer(W5500, SNMP_SOCKET, response_msg.buffer, response_msg.index, 0);
         } else {
             printf("Failed to parse the SNMP message: %i\r\n", ret);

@@ -5,5 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-struct Timer { unsigned int read_us() { static unsigned int t = 0; return t += 1000; } };
+#include <chrono>
+struct Timer {
+	unsigned int read_us() const { static unsigned int t = 0; return t += 1000; }
+	std::chrono::microseconds elapsed_time() const { return std::chrono::microseconds(read_us()); }
+};
 #endif

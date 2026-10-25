@@ -31,10 +31,7 @@ void radio_RX_FIFO_dequeue (W5500_chip* W5500);
 
 void radio_signalisation_frame_building(void);
 
-//int FEC_encode (unsigned char* data_in, TX_buffer_struct* FIFO_out, int size_in); 
-//#ifdef EXT_SRAM_USAGE
 int FEC_encode2 (unsigned char* data_in, unsigned char* data_out, int size_in);
-//#endif
 int FEC_decode(unsigned char* data_out, int size_in, unsigned int* micro_BER); 
 
 int size_w_FEC_compute (int size_wo_FEC); 

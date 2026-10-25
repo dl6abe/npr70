@@ -17,6 +17,8 @@
 
 #ifndef GLOB_VARIAB_F4
 #define GLOB_VARIAB_F4
+#include <chrono>
+using namespace std::chrono_literals;	// 5ms for ThisThread::sleep_for
 #include "SI4463.h"
 #include "W5500.h"
 
@@ -44,7 +46,7 @@ extern ext_SRAM_chip* SPI_SRAM_p;
 	#define SI4463_NOUTDIV 8
 #endif
 
-// Set by the Makefile: YYMMDD and the build hour as a letter (A = 00 ... X = 23)
+// Set by the build (npr70-ce/build.sh): YYMMDD and the build hour as a letter (A = 00 ... X = 23)
 extern const char FW_VERSION_ID[];
 #define FW_VERSION FW_VERSION_ID
 // Version of the mbed-os the firmware was built with (from mbed.h, see global_variables.cpp)
@@ -70,7 +72,6 @@ extern unsigned int TX_buff_intern_WR_pointer;
 extern unsigned int TX_buff_intern_RD_pointer;
 extern unsigned int TX_buff_intern_last_ready;
 
-extern unsigned char TX_buff_ext_sizes[1024];//1024
 extern unsigned int TX_buff_ext_WR_pointer;
 extern unsigned int TX_buff_ext_RD_pointer;
 extern unsigned int TX_buff_ext_last_ready;
@@ -83,7 +84,6 @@ extern char HMI_out_str[120];
 extern unsigned int RX_FIFO_WR_point;
 extern unsigned int RX_FIFO_RD_point;
 extern unsigned int RX_FIFO_last_received;
-//extern unsigned char RX_FIFO_data[0x2000]; //8kB
 extern unsigned char RX_FIFO_data[0x2000]; //8kB
 #define RX_FIFO_mask 0x1FFF 
 
@@ -91,7 +91,6 @@ extern unsigned char RX_FIFO_data[0x2000]; //8kB
 #define TXPS_FIFO_threshold 14000
 #define TXPS_FIFO_threshold_sig 16380
 
-//#define CONF_Tx_rframe_timeout 30
 //CONF_Tx_rframe_timeout unit 1/65000 th of a second
 // *** TDMA ***
 extern unsigned char TX_signaling_TDMA_frame[300]; 
@@ -139,7 +138,6 @@ extern int DEBUG_max_rx_size_w5500;
 extern unsigned int TDMA_slave_last_master_top;
 
 // *** STATISTIC and DEBUG variables ***
-//extern unsigned int debug_counter;
 extern unsigned int RX_top_FDD_up_counter;
 extern int RX_Eth_IPv4_counter;
 extern int TX_radio_IPv4_counter;
@@ -150,11 +148,23 @@ extern unsigned int RSSI_stat_pkt_nb;
 extern int slave_new_burst_tx_pending;
 
 extern Timer GLOBAL_timer;
+// Microseconds on a Timer as int: the lower 32 bits, wraps after 2^31 us like the former Timer::read_us().
+// Callers use differences of two readings, with unsigned arithmetic. Keep the int type, it fixes the wrap.
+// A macro and no function: an inline function changes the generated code (log 2.156), the macro does not.
+#define TIMER_READ_US_SLOW(t) static_cast<int>((t).elapsed_time().count())
+// Option NPR_TIMER_TICKER (issue #38 part 2): GLOBAL_timer is read straight from the us ticker. elapsed_time() takes a critical
+// section and computes in 64 bit. The ticker counts from the boot and ignores GLOBAL_timer.reset(), so every reading of
+// GLOBAL_timer goes through this macro and has the same offset; only differences and ages are used. A Timer that is reset
+// while running (slow_timer in main.cpp) must use TIMER_READ_US_SLOW.
+#ifdef NPR_TIMER_TICKER
+#define TIMER_READ_US(t) static_cast<int>(us_ticker_read())
+#else
+#define TIMER_READ_US(t) TIMER_READ_US_SLOW(t)
+#endif
 
 // *** ARP and DHCP and "routing" ***
 struct LAN_conf_T { 
 	
-	//unsigned char modem_MAC[6]; 
 	unsigned long int LAN_modem_IP;
 	unsigned long int DHCP_range_start;
 	unsigned long int DHCP_range_size; //4
@@ -197,13 +207,13 @@ extern unsigned char CONF_preamble_TX_short;
 extern unsigned long int last_rframe_seen;
 
 extern long int TDMA_table_TA[radio_addr_table_size];
+extern unsigned char G_ta_valid[radio_addr_table_size];   // 1 once a TA measurement was accepted for this client (the display shows n/a before, #47)
 
 extern unsigned short int G_downlink_RSSI; 
 extern unsigned short int G_radio_addr_table_RSSI[radio_addr_table_size]; 
 extern unsigned short int G_downlink_BER; 
 extern unsigned short int G_radio_addr_table_BER[radio_addr_table_size]; 
 extern short int G_downlink_TA; 
-//extern short int G_radio_addr_table_TA[radio_addr_table_size]; 
 extern int G_downlink_bandwidth_temp;
 
 // Receive statistics per radio frame, counted after the FEC check (one frame = 4 blocks, the 4th is the XOR of the others)

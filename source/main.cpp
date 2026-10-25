@@ -20,7 +20,6 @@
 #include "SI4463.h"
 #include "HMI_telnet.h"
 #include "SNMP.h"
-//#include "Virt_Chan.h"
 #include "Eth_IPv4.h"
 #include "DHCP_ARP.h"
 #include "global_variables.h"
@@ -33,8 +32,6 @@
 #include "ext_SRAM2.h"
 
 //#define NPR_L476
-//Serial pc(SERIAL_TX, SERIAL_RX); // Nucleo
-//Serial pc(USBTX, USBRX); //NXP LPC1769
 
 DigitalInOut FDD_trig_pin(PA_10);//GPIO_11
 InterruptIn FDD_trig_IRQ(PA_10);//GPIO_11
@@ -49,23 +46,9 @@ DigitalOut LED_connected(PA_12);
 DigitalIn Int_W5500(PA_8);
 DigitalOut CS1(PA_11);//CS W5500
 // W5500 and external SRAM on SPI3 (AF6), radio on SPI1 (AF5): two different peripherals.
-// PB_5/PB_4/PB_3 can be SPI1 (AF5) or SPI3 (AF6). Up to mbed-os 5.8.5 the plain names select SPI3.
-// Since 5.8.6 the plain names select SPI1 (the same peripheral as the radio on PA_7/PA_6/PA_5)
-// and the _ALT0 names select SPI3. Two SPI objects on one peripheral corrupt each other.
-// NPR_SPI2_ALT0 can be set by the build (tools/mbed_port/build_port.sh reads the pin map of the
-// mbed-os tree). Without it the version decides: ALT0 from mbed-os 5.8.6 on.
-#ifndef NPR_SPI2_ALT0
-#if defined(MBED_ENCODE_VERSION) && defined(MBED_VERSION)
-#if MBED_VERSION >= MBED_ENCODE_VERSION(5, 8, 6)
-#define NPR_SPI2_ALT0 1
-#endif
-#endif
-#endif
-#if defined(NPR_SPI2_ALT0) && NPR_SPI2_ALT0
+// PB_5/PB_4/PB_3 can be SPI1 (AF5) or SPI3 (AF6). The plain names select SPI1 (the same peripheral as the radio
+// on PA_7/PA_6/PA_5) and the _ALT0 names select SPI3. Two SPI objects on one peripheral corrupt each other.
 SPI_F4HDK spi_2(PB_5_ALT0, PB_4_ALT0, PB_3_ALT0); // mosi, miso, sclk
-#else
-SPI_F4HDK spi_2(PB_5, PB_4, PB_3); // mosi, miso, sclk
-#endif
 DigitalOut CS3(PB_0);// CS ext SRAM PB_0 
 
 InterruptIn Int_SI4463(PA_3);
@@ -91,7 +74,7 @@ int main()
 	// read the reset flags first and clear them so the next start sees only its own reason
 	G_reset_reason = decode_reset_reason(RCC->CSR);
 	RCC->CSR |= RCC_CSR_RMVF;
-    ThisThread::sleep_for(200);
+    ThisThread::sleep_for(200ms);
 	pc.baud(921600);
     pc.printf("\r\n\r\n" FW_BANNER_FORMAT, FW_VERSION, MBED_OS_VERSION, snmp_reset_reason_text(G_reset_reason));
 	
@@ -108,12 +91,10 @@ int main()
     W5500_1.cs = &CS1;
     W5500_1.interrupt = &Int_W5500; 
 	
-//#ifdef EXT_SRAM_USAGE
 	static ext_SRAM_chip SPI_SRAM;
 	SPI_SRAM_p = &SPI_SRAM;
 	SPI_SRAM.spi_port = &spi_2;
 	SPI_SRAM.cs = &CS3;
-//#endif
 	
 	static SI4463_Chip SI4463_1;
 	SI4463_1.spi = &spi_1;//1
@@ -150,12 +131,12 @@ int main()
 	CS3=1;
 	SI4463_SDN = 1;
 	
-	ThisThread::sleep_for(20);
+	ThisThread::sleep_for(20ms);
 	is_SRAM_ext = ext_SRAM_detect();
 	
 	LED_RX_loc = 1; 
 	for (i=0; i<7; i++) {
-		ThisThread::sleep_for(200);
+		ThisThread::sleep_for(200ms);
 		LED_RX_loc = !LED_RX_loc;
 		LED_connected = !LED_connected;
 		SI4463_SDN = !SI4463_SDN;
@@ -170,16 +151,11 @@ int main()
 	RX_FIFO_RD_point = 0;
 	RX_FIFO_last_received = 0;
 
-	//TXPS_FIFO->is_single = 0;
-	//TXPS_FIFO->WR_point = 0;
-	//TXPS_FIFO->RD_point = 0;
-	//TXPS_FIFO->last_ready = 0;
 
 	GLOBAL_timer.reset();
 	GLOBAL_timer.start();
 	TDMA_init_all();
 	
-	//TXPS_FIFO->last_ready = TXPS_FIFO->WR_point;
 	for (i=0; i<0x2000; i++) {
 		RX_FIFO_data[i] = 0;
 	}
@@ -195,10 +171,9 @@ int main()
 		printf("config WITHOUT ext SRAM\r\n");
 	}
 	
-	ThisThread::sleep_for(100);
+	ThisThread::sleep_for(100ms);
 	NFPR_config_read(&Random_pin);
 
-	//SI4463_print_version(G_SI4463);//!!!!
 	SI4463_get_state(G_SI4463);
 
 	i = SI4463_configure_all();
@@ -207,18 +182,17 @@ int main()
 	} else {
 		HMI_printf("SI4463 error while configure\r\n");
 		SI4463_print_version(G_SI4463);
-		ThisThread::sleep_for(5000);
+		ThisThread::sleep_for(5000ms);
 		if (serial_term_loop() == 0) {//no serial char detected
 			NVIC_SystemReset(); //reboot
 		}
 	}
-	//SI4463_print_version(G_SI4463);//!!!!
 	
 	W5500_initial_configure(W5500_p1);
-	ThisThread::sleep_for(2);
+	ThisThread::sleep_for(2ms);
 #ifdef EXT_SRAM_USAGE
 	ext_SRAM_set_mode(SPI_SRAM_p);
-	ThisThread::sleep_for(2);
+	ThisThread::sleep_for(2ms);
 	ext_SRAM_init();
 #endif
 	TDMA_NULL_frame_init(70);
@@ -226,8 +200,6 @@ int main()
 	SI4463_periodic_temperature_check(G_SI4463);
 	Int_SI4463.fall(&SI4463_HW_interrupt);
 	if (CONF_radio_default_state_ON_OFF) {
-		//TDMA_init_all();
-		//SI4463_radio_start();
 		RADIO_on(1, 0, 1);//init state, no reconfigure, HMI output
 	}
 	HMI_printf("ready> ");
@@ -236,7 +208,6 @@ int main()
 	unsigned int timer_snapshot;
 	int slow_action_counter = 0;
 	int signaling_counter = 0;
-	//SI4463_temp_check_init();
 	
 	int telnet_counter = 0;
 	
@@ -257,7 +228,7 @@ int main()
 			if (is_SRAM_ext == 1) {
 				ext_SRAM_periodic_call();
 			}
-			timer_snapshot = slow_timer.read_us();
+			timer_snapshot = TIMER_READ_US_SLOW(slow_timer);
 			if (timer_snapshot > 666000) {//666000
 				slow_timer.reset();
 				slow_action_counter++;
@@ -266,7 +237,6 @@ int main()
 				if (slow_action_counter == 0) {
 					HMI_periodic_call();
 				}
-				//debug_counter = 0;
 
 				
 				if (slow_action_counter == 1) {//every 2 sec

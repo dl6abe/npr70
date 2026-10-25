@@ -46,7 +46,6 @@ void signaling_frame_exploitation (unsigned char* unFECdata, int unFECsize, int 
 	unsigned char local_RSSI;
 	unsigned short int local_BER;
 	short int local_TA;
-	//printf("signaling rx\r\n");
 	do {
 		field_type = unFECdata[data_pos];
 		field_length = unFECdata[data_pos+1];
@@ -117,14 +116,12 @@ void signaling_whois_interpret(unsigned char loc_ID, unsigned char* loc_callsign
 	unsigned char IP_start_c[5];
 	
 	IP_int2char (loc_IP_start, IP_start_c); 
-	//printf("WHOIS ID:%i CALL:%s IP_start %i.%i.%i.%i IP_size %i\r\n", loc_ID, (char*)loc_callsign, 
-	//	IP_start_c[0], IP_start_c[1], IP_start_c[2], IP_start_c[3], loc_IP_size);
 	if (!is_TDMA_master) { //only useful for slaves
 		if (loc_ID == 0x7F) { //who entry for master
 			strcpy (CONF_radio_master_callsign, (char*)loc_callsign);		
 		} 
 		else if (loc_ID < radio_addr_table_size) {
-			CONF_radio_addr_table_date[loc_ID] = GLOBAL_timer.read_us();
+			CONF_radio_addr_table_date[loc_ID] = TIMER_READ_US(GLOBAL_timer);
 			CONF_radio_addr_table_status[loc_ID] = 2; //
 			strcpy (CONF_radio_addr_table_callsign[loc_ID], (char*)loc_callsign);
 			CONF_radio_addr_table_IP_begin[loc_ID] = loc_IP_start;
@@ -189,8 +186,6 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 			existing_entry = i;
 		}
 	}
-	//printf ("connect req received\r\n");
-	//printf ("found client entry %i\r\n", existing_entry);
 	if (existing_entry != -1) {
 		previous_status = CONF_radio_addr_table_status[existing_entry];
 	}
@@ -199,9 +194,8 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 	if ( (existing_entry != -1) && (req_IP_size == CONF_radio_addr_table_IP_size[existing_entry]) ) {
 		client_ID = existing_entry;
 		CONF_radio_addr_table_status[existing_entry] = 1;
-		CONF_radio_addr_table_date[existing_entry] = GLOBAL_timer.read_us();
+		CONF_radio_addr_table_date[existing_entry] = TIMER_READ_US(GLOBAL_timer);
 		loc_ack = 1; // Ack
-		//printf("existing entry matches\r\n");
 	}
 	// 2.2) existing entry with different size
 	if ( (existing_entry != -1) && (req_IP_size != CONF_radio_addr_table_IP_size[existing_entry]) ) {
@@ -213,13 +207,11 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 			CONF_radio_addr_table_IP_begin[client_ID] = proposed_IP;
 			CONF_radio_addr_table_IP_size[client_ID] = req_IP_size;
 			strcpy (CONF_radio_addr_table_callsign[client_ID], (char*)client_callsign);
-			CONF_radio_addr_table_date[client_ID] = GLOBAL_timer.read_us();
+			CONF_radio_addr_table_date[client_ID] = TIMER_READ_US(GLOBAL_timer);
 			loc_ack = 1;
-			//printf("existing entry doesnt match, ok new\r\n");
 		} else { //no IP found
 			NACK_reason = 0x02;
 			loc_ack = 0;
-			//printf("existing entry doesnt match, no more IP\r\n");
 		}
 	}
 	if ( (existing_entry != -1) && (previous_status==0) && (loc_ack==1) ) {
@@ -231,7 +223,6 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 		for (i=radio_addr_table_size-1; i>=0; i--) {
 			if (CONF_radio_addr_table_status[i] <= 0) {
 				client_ID = i;
-				//printf("client ID search %i\r\n", client_ID);
 			}
 		}
 		if (client_ID == 0xFF) {
@@ -244,14 +235,12 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 				CONF_radio_addr_table_IP_begin[client_ID] = proposed_IP;
 				CONF_radio_addr_table_IP_size[client_ID] = req_IP_size;
 				strcpy (CONF_radio_addr_table_callsign[client_ID], (char*)client_callsign);
-				CONF_radio_addr_table_date[client_ID] = GLOBAL_timer.read_us();
+				CONF_radio_addr_table_date[client_ID] = TIMER_READ_US(GLOBAL_timer);
 				TDMA_init_TA(client_ID, TA_input);
 				loc_ack = 1;
-				//printf("new, alloc OK\r\n");
 			} else { //no IP found
 				NACK_reason = 0x02;
 				loc_ack = 0;
-				//printf("new, no more IP\r\n");
 			}
 		}
 	}
@@ -272,7 +261,6 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 		IP_int2char (LAN_conf_applied.LAN_DNS_value, raw_answer + 57); 					// DNS value
 		signaling_TX_add_entry (raw_answer, 61);
 		signaling_frame_push();
-		//printf("\r\n ACK sent\r\n\r\n");
 	}
 	else { // NACK
 		raw_answer[0] = 0x07; //signaling type = connection NACK
@@ -282,7 +270,6 @@ void signaling_connect_req_process (unsigned char* client_callsign, unsigned lon
 		strcpy ((char*)(raw_answer + 19), CONF_radio_my_callsign); // Master callsign;
 		signaling_TX_add_entry (raw_answer, 35);
 		signaling_frame_push();
-		//printf("\r\n NACK sent\r\n\r\n");
 	}
 }
 
@@ -352,11 +339,9 @@ void signaling_connect_ACK_process(unsigned char* raw_data)
 	my_client_radio_connexion_state = 2;
 	connect_state_machine_counter = 0;
 	time_counter_last_ack = 0; 
-	//printf("\r\n REQ ACK Received\r\n\r\n");
 }
 
 void signaling_connect_NACK_process (unsigned char reason_loc) {
-	//printf("NACK reason: %i\r\n", reason_loc);
 	G_connect_rejection_reason = reason_loc;
 	my_client_radio_connexion_state = 3;
 	// The master frees the old entry and gives that ID no TX slot. Only the unconnected ID 0x7E
@@ -369,7 +354,6 @@ void signaling_connect_NACK_process (unsigned char reason_loc) {
 static unsigned char loc_data[40];
 
 void signaling_connect_req_TX(void) {
-	//static unsigned char loc_data[30];
 	loc_data[0] = 0x05;	// signaling type = connection request
 	loc_data[1] = 21; 	// field size
 	strcpy ((char*)(loc_data+2), CONF_radio_my_callsign); // callsign
@@ -377,7 +361,6 @@ void signaling_connect_req_TX(void) {
 	loc_data[22] = CONF_radio_static_IP_requested;
 	signaling_TX_add_entry (loc_data, 23);
 	signaling_frame_push();
-	//printf ("\r\nNEW REQUEST TX\r\n\r\n");
 }
 
 void signaling_disconnect_req_process (unsigned loc_ID, unsigned char* loc_callsign) {
@@ -402,7 +385,6 @@ void signaling_disconnect_ACK_process (unsigned loc_ID, unsigned char* loc_calls
 }
 
 void signaling_disconnect_req_TX (void) {
-	//static unsigned char loc_data[30]; // moved global
 	loc_data[0] = 0x0B;	// signaling type = disconnect ACK
 	loc_data[1] = 17; 	// field size
 	loc_data[2] = my_radio_client_ID;
@@ -412,7 +394,6 @@ void signaling_disconnect_req_TX (void) {
 }
 
 void signaling_disconnect_ACK_TX (unsigned loc_ID, unsigned char* loc_callsign) {
-	//static unsigned char loc_data[30]; // moved global
 	loc_data[0] = 0x0C;	// signaling type = disconnect ACK
 	loc_data[1] = 17; 	// field size
 	loc_data[2] = loc_ID;
@@ -422,7 +403,6 @@ void signaling_disconnect_ACK_TX (unsigned loc_ID, unsigned char* loc_callsign) 
 }
 
 // TX part
-//void signaling_frame_init(unsigned char* TX_signal_frame_raw) {
 void signaling_frame_init(void) {
 	if (is_TDMA_master) {
 		TX_signal_frame_raw[0] = 0xFF; //broadcast address (plus parity bit)
@@ -453,7 +433,6 @@ void signaling_single_whois_TX(unsigned char loc_ID, char* loc_callsign,
 	signaling_TX_add_entry (loc_data, 32); //previous 27
 }
 
-//void signaling_whois_TX(unsigned char* TX_signal_frame_raw) {
 void signaling_whois_TX(void) {
 	int i; 
 	unsigned int RSSI_loc;
@@ -490,7 +469,6 @@ void signaling_TX_add_entry(unsigned char* raw_data, int size) {
 	}
 }
 
-//void signaling_frame_push(unsigned char* TX_signal_frame_raw) {
 void signaling_frame_push(void) {
 	int size_w_FEC;
 	int size_wo_FEC;
@@ -505,27 +483,16 @@ void signaling_frame_push(void) {
 		size_wo_FEC = 69;
 	}
 
-	//printf("sig NO ext SRAM\r\n");
 	if (TX_FIFO_full_global(0) == 0) {
-		timer_snapshot = GLOBAL_timer.read_us();
-		//TXPS_FIFO->data[TXPS_FIFO->WR_point & TXPS_FIFO->mask] = (timer_snapshot >> 16) & 0xFF; //timer 
+		timer_snapshot = TIMER_READ_US(GLOBAL_timer);
 		rframe_TX[0] = (timer_snapshot >> 16) & 0xFF;
-		//TXPS_FIFO->WR_point++;
 		size_w_FEC = size_w_FEC_compute (size_wo_FEC);
 		
 		rframe_length = size_w_FEC + 1 - SI4463_offset_size;
-		//if (rframe_length < 0) {rframe_length = 0;}
-		//TXPS_FIFO->data[TXPS_FIFO->WR_point & TXPS_FIFO->mask] = rframe_length; 
-		//TXPS_FIFO->WR_point++;
 		rframe_TX[1] = rframe_length;
-		//TXPS_FIFO->data[TXPS_FIFO->WR_point & TXPS_FIFO->mask] = 0x00; //TDMA byte
-		//TXPS_FIFO->WR_point++;
 		rframe_TX[2] = 0x00; //TDMA byte
-		//size_w_FEC = FEC_encode(TX_signal_frame_raw, TXPS_FIFO, size_wo_FEC);
 		size_w_FEC = FEC_encode2(TX_signal_frame_raw, rframe_TX+3, size_wo_FEC);
-		//TX_intern_FIFO_write(rframe_TX, size_w_FEC+3);
 		TX_FIFO_write_global(rframe_TX, size_w_FEC+3);
-		//TXPS_FIFO->last_ready = TXPS_FIFO->WR_point;
 	}
 	TX_signal_frame_point = 0;
 }
@@ -544,9 +511,9 @@ void signaling_periodic_call() { // called every 2 to 6 seconds
 		if ( (my_client_radio_connexion_state==1) && (connect_state_machine_counter>2) ) {//waiting for connexion
 			signaling_connect_req_TX();
 			connect_state_machine_counter = 0;
-			timer_snapshot = GLOBAL_timer.read_us();
+			timer_snapshot = TIMER_READ_US(GLOBAL_timer);
 			if ( (timer_snapshot - last_rframe_seen) > CONF_radio_timeout_small) {
-				SI4463_prepa_TX_1_call.attach_us(&SI4463_prepa_TX_1, 500000);
+				SI4463_prepa_TX_1_call.attach(&SI4463_prepa_TX_1, std::chrono::microseconds(500000));
 			}
 		}
 		if ( (my_client_radio_connexion_state==2) && (connect_state_machine_counter>5) ) {//already connected periodic update
@@ -574,7 +541,7 @@ void signaling_periodic_call() { // called every 2 to 6 seconds
 	
 	// MASTER : timeout management for clients
 	if (is_TDMA_master) {
-		timer_snapshot = GLOBAL_timer.read_us();
+		timer_snapshot = TIMER_READ_US(GLOBAL_timer);
 		for (i=0; i< radio_addr_table_size; i++) {
 			time_since_last_ack = timer_snapshot - CONF_radio_addr_table_date[i];
 			if ( (CONF_radio_addr_table_status[i] == 1) && (time_since_last_ack > (2000000UL*connexion_timeout*CONF_signaling_period)) ) {

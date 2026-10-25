@@ -29,8 +29,6 @@
 #define SI4463_CONF_max_field2_size 345 
 //63
 
-//#define SI4463_time_byte 8
-//#define SI4463_zero_frame_time 590
 
 struct SI4463_Chip{
     SPI_F4HDK* spi;
@@ -57,25 +55,20 @@ void SI4463_print_version(SI4463_Chip* SI4463);
 
 void SI4463_FIFO_status(SI4463_Chip* SI4463, int* RX_FIFO_count, int* TX_FIFO_count, int reset);
 
-//void SI4463_set_GPIO(SI4463_Chip* SI4463, unsigned char GPIO_st_2, unsigned char GPIO_st_3);
 
-void SI4463_FIFO_write(SI4463_Chip* SI4463, unsigned char* data, int count);
 
-void SI4463_FIFO_read(SI4463_Chip* SI4463, unsigned char* data, int size); 
 
 void SI4463_change_state (SI4463_Chip* SI4463, unsigned char new_state);
 
 void SI4463_start_RX (SI4463_Chip* SI4463, unsigned char channel);
 
 void SI4463_start_TX (SI4463_Chip* SI4463, unsigned char channel, unsigned int size);
-//void SI4463_start_TX (SI4463_Chip* SI4463, unsigned char channel, unsigned int size, unsigned char next_state); 
 void SI4463_start_TX_repeat (SI4463_Chip* SI4463, unsigned char channel, unsigned int size);
 
 void SI4463_read_FRR(SI4463_Chip* SI4463, unsigned char* data);
 
 int SI4463_get_state(SI4463_Chip* SI4463);
 
-//void SI4463_init_RX();
 
 void SI4463_clear_IT(SI4463_Chip* SI4463, unsigned char PH_clear, unsigned char modem_clear);
 

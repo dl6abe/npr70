@@ -8,6 +8,49 @@ static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL line %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 int main() {
+	// ---- TA statistics of the master (issue #47)
+	diag_ta_T ta;
+	memset(&ta, 0xAA, sizeof(ta));
+	diag_ta_clear(&ta);
+	CHECK(ta.n[DIAG_TA_FRAME] == 0 && ta.values == 0 && ta.accepted_client[3] == 0, "cleared");
+	diag_ta_count(&ta, DIAG_TA_FRAME);
+	diag_ta_count(&ta, DIAG_TA_FRAME);
+	diag_ta_count(&ta, DIAG_TA_SYNC_UP);
+	diag_ta_count(&ta, DIAG_TA_N);                    // outside of the range: ignored
+	diag_ta_count(&ta, -1);
+	CHECK(ta.n[DIAG_TA_FRAME] == 2 && ta.n[DIAG_TA_SYNC_UP] == 1 && ta.n[DIAG_TA_PARITY] == 0, "counts");
+	diag_ta_value(&ta, DIAG_TA_ACCEPTED, 154, 0);
+	diag_ta_value(&ta, DIAG_TA_ACCEPTED, 150, 0);
+	diag_ta_value(&ta, DIAG_TA_ABOVE, 2500, 0);
+	diag_ta_value(&ta, DIAG_TA_BELOW, -400, 6);
+	CHECK(ta.n[DIAG_TA_ACCEPTED] == 2 && ta.n[DIAG_TA_ABOVE] == 1 && ta.n[DIAG_TA_BELOW] == 1, "window classes");
+	CHECK(ta.accepted_client[0] == 2 && ta.accepted_client[6] == 0, "accepted per client: only accepted values count");
+	CHECK(ta.values == 4 && ta.last == -400 && ta.min == -400 && ta.max == 2500, "raw values %u last %d min %d max %d", (unsigned)ta.values, (int)ta.last, (int)ta.min, (int)ta.max);
+	diag_ta_value(&ta, DIAG_TA_ACCEPTED, 5, 9);        // a client number outside of the table is not indexed
+	CHECK(ta.n[DIAG_TA_ACCEPTED] == 3, "client outside of the table is counted but not indexed");
+	// ---- spans of the start of a transmission (issue #41)
+	diag_span_T sp;
+	memset(&sp, 0, sizeof(sp));                    // the all-zero state of a static variable is empty
+	char sline[160];
+	diag_span_line("empty", &sp, sline, sizeof(sline));
+	CHECK(strstr(sline, "none yet") != NULL, "empty span line: %s", sline);
+	diag_span_record(&sp, 1100);
+	CHECK(sp.count == 1 && sp.min_us == 1100 && sp.max_us == 1100 && sp.last_us == 1100, "first span %u %u %u", (unsigned)sp.count, (unsigned)sp.min_us, (unsigned)sp.max_us);
+	diag_span_record(&sp, 1300);
+	diag_span_record(&sp, 1000);
+	CHECK(sp.count == 3 && sp.min_us == 1000 && sp.max_us == 1300 && sp.last_us == 1000 && sp.sum_us == 3400, "three spans");
+	diag_span_line("chain", &sp, sline, sizeof(sline));
+	CHECK(strstr(sline, "n      3") != NULL && strstr(sline, "min  1000") != NULL && strstr(sline, "mean  1133") != NULL && strstr(sline, "max  1300") != NULL, "line: %s", sline);
+	diag_span_clear(&sp);
+	CHECK(sp.count == 0 && sp.min_us == 0xFFFFFFFFu && sp.max_us == 0, "cleared");
+	diag_span_record(&sp, 7);
+	CHECK(sp.min_us == 7 && sp.max_us == 7, "after clear the first value is the smallest");
+	// ---- FIFO fill from two counters that only count up (issue #37)
+	CHECK(diag_buf_fill(10, 4) == 6, "fill 10-4");
+	CHECK(diag_buf_fill(5, 5) == 0, "fill equal");
+	CHECK(diag_buf_fill(3, 8) == 0, "read counter ahead gives 0, not a huge value");
+	CHECK(diag_buf_fill(2, 0xFFFFFFFEu) == 4, "write counter wrapped: %d", diag_buf_fill(2, 0xFFFFFFFEu));
+	CHECK(diag_buf_fill(200, 0) == 200, "a fill above the capacity of 128 stays visible (overrun)");
 	// ---- buckets: <=5 <=10 <=20 <=50 <=100 <=200 <=500 >500
 	struct { uint32_t us; int bucket; } b[] = {{0, 0}, {5, 0}, {6, 1}, {10, 1}, {11, 2}, {20, 2}, {21, 3}, {50, 3}, {51, 4}, {100, 4}, {101, 5},
 		{200, 5}, {201, 6}, {500, 6}, {501, 7}, {100000, 7}, {0xFFFFFFFFu, 7}};

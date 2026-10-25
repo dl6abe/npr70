@@ -8,6 +8,7 @@
 #define radio_addr_table_size 7
 struct W5500_chip;
 extern Timer GLOBAL_timer;
+#define TIMER_READ_US(t) static_cast<int>((t).elapsed_time().count())
 extern unsigned char RX_FIFO_data[0x2000];
 extern unsigned int RX_FIFO_RD_point, RX_FIFO_last_received;
 extern bool is_TDMA_master;
@@ -25,6 +26,12 @@ void IPv4_from_radio(unsigned char*, int);
 void signaling_frame_exploitation(unsigned char*, int, int);
 void TDMA_slave_alloc_exploitation(unsigned char*, int);
 void TDMA_byte_RX_interp(unsigned char, unsigned char, unsigned char, unsigned int);
+// The highest-fill counters of source/diag.h (issue #37), as plain functions that a test can read
+enum { DIAG_BUF_TX_INT, DIAG_BUF_TX_EXT, DIAG_BUF_RX_FIFO, DIAG_BUF_ETH, DIAG_BUF_N };
+extern unsigned int G_buf_max[DIAG_BUF_N];
+extern unsigned int G_buf_eth_rows;
+static inline void DIAG_buf_note(int which, int fill) { if ( (fill > 0) && ((unsigned int)fill > G_buf_max[which]) ) G_buf_max[which] = (unsigned int)fill; }
+static inline void DIAG_buf_eth_row(unsigned int row) { G_buf_eth_rows |= 1u << (row & 31); }
 int FEC_encode2(unsigned char*, unsigned char*, int);
 int FEC_decode(unsigned char*, int, unsigned int*);
 void radio_RX_FIFO_dequeue(W5500_chip*);

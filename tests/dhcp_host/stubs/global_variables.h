@@ -14,4 +14,5 @@ struct LAN_conf_T {
 	unsigned char DHCP_server_active;
 };
 extern Timer GLOBAL_timer;
+#define TIMER_READ_US(t) static_cast<int>((t).elapsed_time().count())
 #endif

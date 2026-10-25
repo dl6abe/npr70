@@ -30,7 +30,6 @@ void ext_SRAM_init(void);
 
 void ext_SRAM_set_mode(ext_SRAM_chip* loc_SPI);
 
-//void ext_SRAM_read2(ext_SRAM_chip* loc_SPI, unsigned char* loc_data, unsigned int address, int size);
 
 void ext_SRAM_write(ext_SRAM_chip* loc_SPI, unsigned char* loc_data, unsigned int address, int size);
 	
@@ -38,7 +37,6 @@ int extSRAM_testfreespace(int pkt_nb, unsigned char FIFO_index);
 
 void extSRAM_push(unsigned char* raw_data, int size, unsigned char FIFO_nb);
 
-//void ext_SRAM_periodic_call();
 
 void ext_SRAM_test(ext_SRAM_chip* loc_SPI);
 

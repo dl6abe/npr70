@@ -7,19 +7,20 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap '[ -n "${NPR_KEEP_WORK:-}" ] && cp -R "$work" "$NPR_KEEP_WORK/$(basename "$here")"; rm -rf "$work"' EXIT   # tools/coverage.sh keeps the work dir
 cp "$here"/../hmi_host/stubs/*.h "$here"/driver.cpp "$work"/
 python3 - "$here" "$work" <<'PY'
-import sys
+import sys, os
 here, work = sys.argv[1:3]
-src = open(here + "/../../source/HMI_telnet.cpp", newline='').read().replace('\r\n', '\n').split('\n')
+srcpath = os.path.realpath(here + "/../../source/HMI_telnet.cpp")
+src = open(srcpath, newline='').read().replace('\r\n', '\n').split('\n')
 a = next(i for i, l in enumerate(src) if l.startswith("// Handlers of the 'set"))
 f = next(i for i, l in enumerate(src) if l.startswith("unsigned char HMI_yes_no_2int"))
 b = next(i for i in range(f, len(src)) if src[i] == "}")
 s = next(i for i, l in enumerate(src) if l.startswith("static void HMI_save_command(void) {"))
 e = next(i for i in range(s, len(src)) if src[i] == "}")
-open(work + "/ip_part.inc", "w").write('\n'.join(src[a:b+1]) + '\n' + '\n'.join(src[s:e+1]) + '\n')
+open(work + "/ip_part.inc", "w").write('#line %d "%s"\n' % (a + 1, srcpath) + '\n'.join(src[a:b+1]) + '\n' + '#line %d "%s"\n' % (s + 1, srcpath) + '\n'.join(src[s:e+1]) + '\n')
 PY
-flags="-std=gnu++11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-format-security -Wno-unused-function -I$work"
+flags="-std=gnu++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-format-security -Wno-unused-function -I$work"
 c++ $flags -o "$work/ip" "$work/driver.cpp" 2>"$work/build.log" || { cat "$work/build.log"; exit 1; }
 "$work/ip" && echo "ip host test OK" || { echo "ip host test FAILED"; exit 1; }

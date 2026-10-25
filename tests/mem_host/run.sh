@@ -13,6 +13,7 @@
 #  11  PHY self-heal and re-configure watchdog   (W5500.cpp, fake PHY register and clock)
 #  12  NACK to a connected client: ID back to 0x7E (signaling.cpp, NETWORK_DEBUG_LOG.md 2.77)
 #  13  multiframe mask field 0 to 15 from the master (TDMA.cpp, LUT_multif_mask)
+#  15  TA difference across the 24 bit wrap of the radio timer (TDMA.cpp, issue #48)
 #  14  callsign copied with strncpy(..., 15) is terminated at byte 15 (config_flash.cpp)
 # All cases must pass. A bug that is open again can be marked as expected failure (XFAIL) with
 # EXPECT<n>=fail, for example EXPECT2=fail. A different result than expected makes the script exit with 1.
@@ -20,20 +21,20 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 src="$here/../../source"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap '[ -n "${NPR_KEEP_WORK:-}" ] && cp -R "$work" "$NPR_KEEP_WORK/$(basename "$here")"; rm -rf "$work"' EXIT   # tools/coverage.sh keeps the work dir
 cp "$here"/stubs/*.h "$here"/*.cpp "$here"/*.h "$work"/ 2>/dev/null
 cp "$src/W5500.h" "$work"/
 # IP_char2int / IP_int2char from Eth_IPv4.cpp
 python3 - "$src" "$work" <<'PY'
-import sys, re
+import sys, re, os
 src, work = sys.argv[1:3]
 def lines(f): return open(src + "/" + f, newline='').read().replace('\r\n', '\n').split('\n')
 def cut(f, start, end):
     L = lines(f)
     a = next(i for i, l in enumerate(L) if l.lstrip().startswith(start))
     b = next(i for i in range(a + 1, len(L)) if L[i].lstrip().startswith(end))
-    return '\n'.join(L[a:b]) + '\n'
-open(work + "/ip_conv.inc", "w").write(cut("Eth_IPv4.cpp", "unsigned long int IP_char2int", "//static unsigned char match_RTP_value"))
+    return '#line %d "%s"\n' % (a + 1, os.path.realpath(src + "/" + f)) + '\n'.join(L[a:b]) + '\n'
+open(work + "/ip_conv.inc", "w").write(cut("Eth_IPv4.cpp", "unsigned long int IP_char2int", "int Eth_RX_dequeue"))
 # DHCP part and the UDP read functions
 w = cut("W5500.cpp", "void W5500_read_long", "int W5500_read_MAC_pckt")
 w = w[:w.rindex("/**")]          # drop the comment of the next function
@@ -44,15 +45,16 @@ open(work + "/L1L2_part.inc", "w").write(cut("L1L2_radio.cpp", "void radio_RX_FI
 def tail(f, start):
     L = lines(f)
     a = next(i for i, l in enumerate(L) if l.lstrip().startswith(start))
-    return '\n'.join(L[a:]) + '\n'
+    return '#line %d "%s"\n' % (a + 1, os.path.realpath(src + "/" + f)) + '\n'.join(L[a:]) + '\n'
 open(work + "/eth_part.inc", "w").write(tail("Eth_IPv4.cpp", "static unsigned char temp_Eth_buffer"))
 open(work + "/W5500_mac.inc", "w").write(cut("W5500.cpp", "int W5500_read_MAC_pckt", "void W5500_write_TX_buffer"))
-open(work + "/pad_part.inc", "w").write(cut("L1L2_radio.cpp", "int size_w_FEC_compute", "//unsigned char TX_buff_intern_FIFOdata[42][384];"))
+open(work + "/pad_part.inc", "w").write(cut("L1L2_radio.cpp", "int size_w_FEC_compute", "void TX_FIFO_write_global"))
 open(work + "/status_part.inc", "w").write(cut("HMI_telnet.cpp", "void HMI_print_status", "void HMI_periodic_call"))
 open(work + "/ack_part.inc", "w").write(cut("signaling.cpp", "void signaling_connect_ACK_process", "void signaling_connect_NACK_process"))
 open(work + "/nack_part.inc", "w").write(cut("signaling.cpp", "void signaling_connect_NACK_process", "static unsigned char loc_data"))
 open(work + "/signaling_part.inc", "w").write(cut("signaling.cpp", "unsigned long int signaling_lookfor_IP_range", "void signaling_connect_ACK_process"))
 open(work + "/phy_part.inc", "w").write(cut("W5500.cpp", "static int W5500_configured", "void W5500_initial_configure"))
+open(work + "/ta_part.inc", "w").write(cut("TDMA.cpp", "int TDMA_TA_measure_single_frame", "void TDMA_init_TA"))
 open(work + "/tdma_part.inc", "w").write(tail("TDMA.cpp", "void TDMA_slave_alloc_exploitation"))
 cfg = open(src + "/config_flash.cpp", newline='').read().replace('\r\n', '\n')
 for name, pat in (("cfg_read", r"[ \t]*strncpy\(CONF_radio_my_callsign, data_r->callsign, 15\);\n(?:[ \t]*CONF_radio_my_callsign\[15\] = 0;\n)?"),
@@ -77,6 +79,7 @@ struct LAN_conf_T {
 };
 extern LAN_conf_T LAN_conf_applied;
 extern Timer GLOBAL_timer;
+#define TIMER_READ_US(t) static_cast<int>((t).elapsed_time().count())
 extern unsigned long int CONF_radio_IP_start, CONF_radio_IP_size;
 extern char CONF_radio_my_callsign[16];
 #endif
@@ -84,7 +87,7 @@ H
 printf '#ifndef STUB_ETH_IPV4_H\n#define STUB_ETH_IPV4_H\nunsigned long int IP_char2int(unsigned char*);\nvoid IP_int2char(unsigned long int, unsigned char*);\n#endif\n' > "$work/Eth_IPv4.h"
 printf '#ifndef STUB_HMI_H\n#define STUB_HMI_H\n#endif\n' > "$work/HMI_telnet.h"
 printf '#ifndef STUB_DHCP_H\n#define STUB_DHCP_H\n#endif\n' > "$work/DHCP_ARP.h"
-flags="-std=gnu++11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-unused-function -Wno-unused-variable -I$work"
+flags="-std=gnu++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-unused-function -Wno-unused-variable -I$work"
 fail=0
 # name, driver, expected (pass|fail), run arguments
 run_case() {
@@ -113,4 +116,5 @@ run_case "11 PHY self-heal" phy "${EXPECT11:-pass}"
 run_case "12 NACK resets the client ID" nack "${EXPECT12:-pass}"
 run_case "13 multiframe mask field 0 to 15" tdma "${EXPECT13:-pass}"
 run_case "14 callsign terminated at byte 15" cfg "${EXPECT14:-pass}"
+run_case "15 TA across the 24 bit wrap, return value" ta "${EXPECT15:-pass}"
 [ $fail -eq 0 ] && echo "mem host tests as expected" || { echo "mem host tests: UNEXPECTED RESULT"; exit 1; }

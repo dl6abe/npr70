@@ -5,6 +5,7 @@
 #define SI4463_offset_size 90
 
 Timer GLOBAL_timer;
+#define TIMER_READ_US(t) static_cast<int>((t).elapsed_time().count())
 unsigned char parity_bit_elab[128];
 int G_uplink_bandwidth_temp, TX_radio_IPv4_counter;
 static unsigned char rframe_TX[384];

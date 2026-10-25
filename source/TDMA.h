@@ -22,7 +22,7 @@ void TDMA_init_all(void);
 
 unsigned char TDMA_byte_elaboration(unsigned char synchro);
 
-short int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char TDMA_byte, unsigned char client_ID, int frame_size_loc);
+int TDMA_TA_measure_single_frame(unsigned int frame_timer, unsigned char TDMA_byte, unsigned char client_ID, int frame_size_loc);
 
 void TDMA_init_TA(unsigned char client_ID, int TA_input);
 

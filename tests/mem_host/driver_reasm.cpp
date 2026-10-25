@@ -7,6 +7,7 @@
 Timer GLOBAL_timer;
 unsigned char RX_FIFO_data[0x2000];
 unsigned int RX_FIFO_RD_point, RX_FIFO_last_received, G_rx_seg_gap;
+unsigned int G_buf_max[DIAG_BUF_N], G_buf_eth_rows;
 bool is_TDMA_master;
 unsigned long int last_rframe_seen, CONF_radio_timeout = 1000000;
 char CONF_radio_addr_table_status[radio_addr_table_size];
@@ -46,5 +47,9 @@ int main(int argc, char** argv) {
 		radio_RX_FIFO_dequeue(0);
 	}
 	printf("%d segments handled, IPv4_from_radio calls %d, last size %d\n", nseg, from_radio_calls, from_radio_size);
+	// issue #37: highest fill of ethernet_buffer (bytes of one packet, row 6 only, 6 segments of 252) and of RX_FIFO_data (one frame: 6 header bytes and the FEC data)
+	printf("highest fill: ethernet_buffer %u (rows 0x%X), RX_FIFO_data %u\n", G_buf_max[DIAG_BUF_ETH], G_buf_eth_rows, G_buf_max[DIAG_BUF_RX_FIFO]);
+	if (G_buf_eth_rows != 0x40 || G_buf_max[DIAG_BUF_ETH] > 1586 || G_buf_max[DIAG_BUF_RX_FIFO] != 350) return 1;
+	if (nseg == 6 && G_buf_max[DIAG_BUF_ETH] != 6 * 252) return 1;
 	return 0;
 }
